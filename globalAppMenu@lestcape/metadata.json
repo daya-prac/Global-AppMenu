@@ -1,0 +1,8 @@
+{
+    "last-edited": "1402594166",
+    "uuid": "globalAppMenu@lestcape",
+    "name": "Global Application Menu", 
+    "description": "Adds global application menu support to cinnamon",
+    "comments": "Adds global application menu support to cinnamon",
+    "website": "https://github.com/lestcape/Global-AppMenu"
+}

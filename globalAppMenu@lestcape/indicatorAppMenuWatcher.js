@@ -122,7 +122,7 @@ IndicatorAppMenuWatcher.prototype = {
     },
 
     _is_cinnamon_session_start: function() {
-        let string_file = this._readFile(GLib.get_home_dir() + "/.xsession-errors")
+        let string_file = this._readFile(GLib.get_home_dir() + "/.xsession-errors");
         return ((!string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
     },
 
@@ -233,7 +233,7 @@ IndicatorAppMenuWatcher.prototype = {
         let [windowId, menuObjectPath] = params;
         let wind = null;
         this._register_window_xid(windowId, wind, menuObjectPath, invocation.get_sender());
-        Main.notify('RegisterWindow: ' + windowId + " " + invocation.get_sender() + " " + menuObjectPath);
+        //Main.notify('RegisterWindow: ' + windowId + " " + invocation.get_sender() + " " + menuObjectPath);
         this.EmitWindowRegistered(windowId, invocation.get_sender(), menuObjectPath);
         //let retval = GLib.Variant.new('(b)', [result]);
         //invocation.return_value(null);
@@ -241,15 +241,14 @@ IndicatorAppMenuWatcher.prototype = {
     },
 
     UnregisterWindowAsync: function(params, invocation) {
-        Main.notify('UnregisterWindow');
         let [windowId] = params;
-        Main.notify('UnregisterWindow: ' + windowId + " " + invocation.get_sender() + " " + menuObjectPath);
+        //Main.notify('UnregisterWindow: ' + windowId + " " + invocation.get_sender() + " " + menuObjectPath);
         this.EmitWindowUnregistered(windowId);
     },
 
     GetMenuForWindowAsync: function(params, invocation) {
         let [windowId] = params;
-        Main.notify('GetMenuForWindow: ' + params + " " + invocation.get_sender());
+        //Main.notify('GetMenuForWindow: ' + params + " " + invocation.get_sender());
         let retval;
         if(windowId in this._registered_windows)
             retval = GLib.Variant.new('(so)', [this._registered_windows[xid].sender, this._registered_windows[xid].menuObjectPath]);
@@ -259,7 +258,7 @@ IndicatorAppMenuWatcher.prototype = {
     },
 
     GetMenusAsync: function(params, invocation) {
-        Main.notify('GetMenus: ' + params + " " + invocation.get_sender());
+        //Main.notify('GetMenus: ' + params + " " + invocation.get_sender());
         let result = [];
         for(let xid in this._registered_windows) {
             result.push([xid, this._registered_windows[xid].sender, this._registered_windows[xid].menuObjectPath]);
@@ -271,12 +270,12 @@ IndicatorAppMenuWatcher.prototype = {
 /* Signals */
     EmitWindowRegistered: function(windowId, service, menuObjectPath) {
         this._dbusImpl.emit_signal('WindowRegistered', GLib.Variant.new('(uso)', [windowId, service, menuObjectPath]));
-        Main.notify('EmitWindowRegistered: ' + windowId + " " + service + " " + menuObjectPath);
+        //Main.notify('EmitWindowRegistered: ' + windowId + " " + service + " " + menuObjectPath);
     },
 
     EmitWindowUnregistered: function(windowId) {
         this._dbusImpl.emit_signal('WindowUnregistered', GLib.Variant.new('(u)', windowId));
-        Main.notify('EmitWindowUnregistered: ' + windowId);
+        //Main.notify('EmitWindowUnregistered: ' + windowId);
     },
 
     //async because we may need to check the presence of a menubar object as well as the creation is async.
@@ -285,9 +284,7 @@ IndicatorAppMenuWatcher.prototype = {
             var sender = this._registered_windows[xid].sender;
             var path = this._registered_windows[xid].menuObjectPath;
             var is_gtk = this._registered_windows[xid].isGtk;
-                Main.notify("holaaaaaaa1 " + " " + is_gtk + " " + sender + " " + path);
             if((sender != "")&&(path != "")) {
-                Main.notify("holaaaaaaa2")
                 if(!is_gtk) {
                     this._validateMenu(sender, path, function(r, name, path) {
                         if (r) {
@@ -298,7 +295,7 @@ IndicatorAppMenuWatcher.prototype = {
                         }
                     });
                 } else {
-                    callback(xid, new DBusMenu.Client(name, path, is_gtk));
+                    callback(xid, new DBusMenu.Client(sender, path, is_gtk));
                 }
             } else {
                 callback(xid, null);
@@ -374,24 +371,33 @@ IndicatorAppMenuWatcher.prototype = {
 
     _register_window_xid: function(xid, wind, menuPath, sender_dbus) {
       try {
-        if(!menuPath) menuPath = "";
-        if(!sender_dbus) sender_dbus = "";
         let appT = null;
         let is_gtk = false;
         if(wind) {
             appT = this.tracker.get_window_app(wind);
-            is_gtk = wind.get_gtk_application_id() != null;
+            if((!menuPath)||(!sender_dbus)) {
+                //get_gtk_menubar_object_path(); get_gtk_app_menu_object_path();
+                let menu_object_path = wind.get_gtk_menubar_object_path();
+                let unique_bus_name = wind.get_gtk_unique_bus_name();
+                if((menu_object_path)&&(unique_bus_name)) {
+                    menuPath = menu_object_path;
+                    sender_dbus = unique_bus_name;
+                    is_gtk = true;
+                }
+            }
         }
+        if(!menuPath) menuPath = "";
+        if(!sender_dbus) sender_dbus = "";
 
         if (xid in this._registered_windows) {
             if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
-                Main.notify("Worong menuPath");
+                Main.notify("Wrong menuPath");
             if ((sender_dbus != "") && (this._registered_windows[xid].sender != "") && (this._registered_windows[xid].sender != sender_dbus))
-                Main.notify("Worong sender");
+                Main.notify("Wrong sender");
             if ((appT != null) && (this._registered_windows[xid].application != null) && (this._registered_windows[xid].application != appT))
-                Main.notify("Worong application");
+                Main.notify("Wrong application");
             if ((wind != null) && (this._registered_windows[xid].window != null) && (this._registered_windows[xid].window != wind))
-                Main.notify("Worong window");
+                Main.notify("Wrong window");
 
             //this._registered_windows[xid].menuObjectPath = menuPath;
             //this._registered_windows[xid].sender = sender_dbus;
@@ -416,9 +422,10 @@ IndicatorAppMenuWatcher.prototype = {
         if ((this.launcher) && (xid in this._registered_windows) && (!this._registered_windows[xid].appMenu)) {
             if ((this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].sender != "")) {
                 this._get_menu_client(xid, Lang.bind(this, this._on_menu_client_ready));
-            } else if (/*(is_gtk) && */((this._registered_windows[xid].menuObjectPath == "") || (this._registered_windows[xid].sender == ""))) {
+            } else if ((this._registered_windows[xid].menuObjectPath == "") || (this._registered_windows[xid].sender == "")) {
+                //_GTK_MENUBAR_OBJECT_PATH _GTK_MENUBAR_OBJECT_PATH
                 let terminal = new TerminalReader("xprop -id " + xid + " -notype _GTK_UNIQUE_BUS_NAME && " +
-                                                  "xprop -id " + xid + " -notype _GTK_APP_MENU_OBJECT_PATH",
+                                                  "xprop -id " + xid + " -notype _GTK_MENUBAR_OBJECT_PATH",
                                                   Lang.bind(this, this._on_terminal_read));
                 terminal.executeReader();
             } 
@@ -428,16 +435,15 @@ IndicatorAppMenuWatcher.prototype = {
 
     _on_terminal_read: function(command, sucess, result) {
         if(sucess) {
-            log("out " + command + " " + result);
             let sender_dbus = "";
             let menuPath = "";
             let xid = parseInt(command.substring(10, command.indexOf(" -notype")));
-            let lines = result.split("\n"); //_GTK_MENUBAR_OBJECT_PATH
-            let obj_keys = { "_GTK_UNIQUE_BUS_NAME":"", "_GTK_APP_MENU_OBJECT_PATH":"" };
+            let lines = result.split("\n");
+            let obj_keys = { "_GTK_UNIQUE_BUS_NAME":"", "_GTK_MENUBAR_OBJECT_PATH":"" };
             if(this._get_values(lines, obj_keys)) {
-                log("ready >" + obj_keys["_GTK_UNIQUE_BUS_NAME"] + "<<>>" + obj_keys["_GTK_APP_MENU_OBJECT_PATH"] + "<");
-                this._registered_windows[xid].menuObjectPath = obj_keys["_GTK_APP_MENU_OBJECT_PATH"];
+                this._registered_windows[xid].menuObjectPath = obj_keys["_GTK_MENUBAR_OBJECT_PATH"];
                 this._registered_windows[xid].sender = obj_keys["_GTK_UNIQUE_BUS_NAME"];
+                this._registered_windows[xid].isGtk = true;
                 this._get_menu_client(xid, Lang.bind(this, this._on_menu_client_ready));
             }
         }

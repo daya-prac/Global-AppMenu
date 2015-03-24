@@ -249,9 +249,10 @@ DBusClientGtk.prototype = {
     __proto__: DBusClient.prototype,
 
     _init: function(busName, busPath) {
-        Main.notify("init")
         //DBusClient.prototype._init.call(this);
-        this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, busName, busPath, Lang.bind(this, this._clientReady));
+        this._busName = busName;
+        this._busPath = busPath;
+        this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
         this._items = { "0": new DbusMenuItem(this, "0", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
 
         // will be set to true if a layout update is requested while one is already in progress
@@ -295,7 +296,7 @@ DBusClientGtk.prototype = {
             return;
         }
 
-        Main.notify("Es> " + result);
+        Main.notify("Gtk Menu Is: " + result);
 
         //let [ revision, root ] = result;
         //this._doLayoutUpdate(root);
@@ -323,8 +324,7 @@ DBusClientGtk.prototype = {
             global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
         }
-        Main.notify("init _clientReady")
-        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, busName, busPath, Lang.bind(this, this._clientActionReady));
+        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientActionReady));
     },
 
     _clientActionReady: function(result, error) {
@@ -332,7 +332,6 @@ DBusClientGtk.prototype = {
             global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
         }
-        Main.notify("init _clientActionReadyy")
         this._requestLayoutUpdate();
 
         // listen for updated layouts and properties
@@ -870,13 +869,11 @@ function Client(busName, path, is_gtk) {
 Client.prototype = {
 
     _init: function(busName, path, is_gtk) {
-            Main.notify("init aaaaaaabbbbbbbbbbbb");
         //this.parent();
         this._busName  = busName;
         this._busPath  = path;
         this._is_gtk  = is_gtk;
         if(is_gtk) {
-            Main.notify("init aaaaaaa");
             this._client = new DBusClientGtk(busName, path);
         } else
             this._client = new DBusClient(busName, path);

@@ -241,105 +241,6 @@ DbusMenuItem.prototype = {
 };
 Signals.addSignalMethods(DbusMenuItem.prototype);
 
-function DBusClientGtk(busName, busPath) {
-    this._init(busName, busPath);
-}
-
-DBusClientGtk.prototype = {
-    __proto__: DBusClient.prototype,
-
-    _init: function(busName, busPath) {
-        //DBusClient.prototype._init.call(this);
-        this._busName = busName;
-        this._busPath = busPath;
-        this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
-        this._items = { "0": new DbusMenuItem(this, "0", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
-
-        // will be set to true if a layout update is requested while one is already in progress
-        // then the handler that completes the layout update will request another update
-        this._flagLayoutUpdateRequired = false;
-        this._flagLayoutUpdateInProgress = false;
-
-        // property requests are queued
-        this._propertiesRequestedFor = [ /* ids */ ];
-    },
-
-    get_root: function() {
-        return this._items["0"];
-    },
-
-    _requestLayoutUpdate: function() {
-        if (this._flagLayoutUpdateInProgress)
-            this._flagLayoutUpdateRequired = true;
-        else
-            this._beginLayoutUpdate();
-    },
-
-    // the original implementation will only request partial layouts if somehow possible
-    // we try to save us from multiple kinds of race conditions by always requesting a full layout
-    _beginLayoutUpdate: function() {
-        // we only read the type property, because if the type changes after reading all properties,
-        // the view would have to replace the item completely which we try to avoid
-        //this._proxy_menu.GetLayoutRemote(0, -1, [ 'type', 'children-display' ], Lang.bind(this, this._endLayoutUpdate));
-        let init_menu = [];
-        for(let x = 0; x < 1024; x++)
-            init_menu.push(x);
-        this._proxy_menu.StartRemote(init_menu, Lang.bind(this, this._endLayoutUpdate));
-
-        this._flagLayoutUpdateRequired = false;
-        this._flagLayoutUpdateInProgress = true;
-    },
-
-    _endLayoutUpdate: function(result, error) {
-        if (error) {
-            global.logWarning("While reading menu layout: "+error);
-            return;
-        }
-
-        Main.notify("Gtk Menu Is: " + result);
-
-        //let [ revision, root ] = result;
-        //this._doLayoutUpdate(root);
-
-        /* fake about to show for firefox: https://bugs.launchpad.net/plasma-widget-menubar/+bug/878165
-        this._items[0].get_children_ids().forEach(function(child_id) {
-            this.send_about_to_show(child_id);
-        }, this);*/
-
-        //this._gcItems();
-
-        //if (this._flagLayoutUpdateRequired)
-        //    this._beginLayoutUpdate();
-        //else
-        //    this._flagLayoutUpdateInProgress = false;
-    },
-
-
-    _doLayoutUpdate: function(item) {
-    },
-
-
-    _clientReady: function(result, error) {
-        if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
-            //FIXME: show message to the user?
-        }
-        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientActionReady));
-    },
-
-    _clientActionReady: function(result, error) {
-        if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
-            //FIXME: show message to the user?
-        }
-        this._requestLayoutUpdate();
-
-        // listen for updated layouts and properties
-        //this._proxy_menu.connectSignal("LayoutUpdated", Lang.bind(this, this._onLayoutUpdated));
-        //this._proxy_menu.connectSignal("ItemsPropertiesUpdated", Lang.bind(this, this._onPropertiesUpdated));
-    }
-};
-
 /**
  * The client does the heavy lifting of actually reading layouts and distributing events
  */
@@ -571,6 +472,171 @@ DBusClient.prototype = {
     }
 };
 Signals.addSignalMethods(DBusClient.prototype);
+
+function DBusClientGtk(busName, busPath) {
+    this._init(busName, busPath);
+}
+
+DBusClientGtk.prototype = {
+    __proto__: DBusClient.prototype,
+
+    _init: function(busName, busPath) {
+        //DBusClient.prototype._init.call(this);
+        this._busName = busName;
+        this._busPath = busPath;
+        this.gtk_menubar_menus = null;
+        this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
+        //FIXME we need to translate the id to the appmenu way?
+        this._items = { "0": new DbusMenuItem(this, "0", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
+
+        // will be set to true if a layout update is requested while one is already in progress
+        // then the handler that completes the layout update will request another update
+        this._flagLayoutUpdateRequired = false;
+        this._flagLayoutUpdateInProgress = false;
+
+        // property requests are queued
+        this._propertiesRequestedFor = [ /* ids */ ];
+    },
+
+    get_root: function() {
+        return this._items["0"];
+    },
+
+    _requestLayoutUpdate: function() {
+        if (this._flagLayoutUpdateInProgress)
+            this._flagLayoutUpdateRequired = true;
+        else
+            this._beginLayoutUpdate();
+    },
+
+    // the original implementation will only request partial layouts if somehow possible
+    // we try to save us from multiple kinds of race conditions by always requesting a full layout
+    _beginLayoutUpdate: function() {
+        // we only read the type property, because if the type changes after reading all properties,
+        // the view would have to replace the item completely which we try to avoid
+        //this._proxy_menu.GetLayoutRemote(0, -1, [ 'type', 'children-display' ], Lang.bind(this, this._endLayoutUpdate));
+        let init_menu = [];
+        for (let x = 0; x < 1024; x++) { init_menu.push(x); }
+
+        this._proxy_menu.StartRemote(init_menu, Lang.bind(this, this._endLayoutUpdate));
+
+        this._flagLayoutUpdateRequired = false;
+        this._flagLayoutUpdateInProgress = true;
+    },
+
+    _endLayoutUpdate: function(result, error) {
+        if (error) {
+            global.logWarning("While reading menu layout: "+error);
+            return;
+        }
+
+        //Now unpack the menu and create a fake root item?
+        if((result) && (result[0])) {
+            this.gtk_menubar_menus = { "0":[] };
+            let root_menu = this.gtk_menubar_menus["0"];
+
+            result[0].forEach(function([menu_pos, section_pos, section_items]) {
+                this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
+
+                if(menu_pos == 0)
+                    this.gtk_menubar_menus["0"].push({":submenu": GLib.Variant.new("(uu)", [menu_pos, section_pos])});
+            }, this);
+
+            this._doLayoutUpdate("0");
+        }
+
+        //this._gcItems();
+
+        //if (this._flagLayoutUpdateRequired)
+        //    this._beginLayoutUpdate();
+        //else
+        //    this._flagLayoutUpdateInProgress = false;
+    },
+
+    _doLayoutUpdate: function(id) {
+        //Main.notify("Gtk Menu Is: " + menu + " " + section + " " + items);
+        try {
+        let item = this.gtk_menubar_menus[id];
+        if(this.gtk_menubar_menus) {
+            let properties = {}; //FIXME
+            let children_ids = [];
+            let id_sub;
+            for(pos in item) {
+                let menu_section = item[pos];
+                if(":submenu" in menu_section) {
+                    let new_pos = menu_section[":submenu"].deep_unpack();
+                    id_sub = "" + new_pos[0] + new_pos[1];
+                    //Main.notify("Gtk Menu id is: " + id_sub);
+                    children_ids.push(id_sub);
+                    this._doLayoutUpdate(id_sub);
+                }
+                if(":section" in menu_section) {
+                    let new_pos = menu_section[":section"].deep_unpack();
+                    let id_sub = "" + new_pos[0] + new_pos[1];
+                    //Main.notify("Gtk Menu id is: " + id_sub);
+                    children_ids.push(id_sub)
+                    this._doLayoutUpdate(id_sub);
+                }
+            }
+
+            if (id in this._items) {
+                // we do, update our properties if necessary
+                for (let prop in properties) {
+                    this._items[id].property_set(prop, properties[prop]);
+                }
+
+                // make sure our children are all at the right place, and exist
+                let old_children_ids = this._items[id].get_children_ids();
+                for (let i = 0; i < children_ids.length; ++i) {
+                    // try to recycle an old child
+                    let old_child = -1;
+                    for (let j = 0; j < old_children_ids.length; ++j) {
+                        if (old_children_ids[j] == children_ids[i]) {
+                            old_child = old_children_ids.splice(j, 1)[0];
+                            break;
+                        }
+                    }
+
+                    if (old_child < 0) {
+                        // no old child found, so create a new one!
+                        this._items[id].add_child(i, children_ids[i]);
+                    } else {
+                        // old child found, reuse it!
+                        this._items[id].move_child(children_ids[i], i);
+                    }
+                }
+            } else {
+                // we don't, so let's create us
+                this._items[id] = new DbusMenuItem(this, id, properties, children_ids);
+                //this._requestProperties(id);
+            }
+        }
+        } catch (e) {Main.notify("Errorrrrr " + e.message);}
+        return id;
+    },
+
+
+    _clientReady: function(result, error) {
+        if (error) {
+            global.logWarning("Could not initialize menu proxy: "+error);
+            //FIXME: show message to the user?
+        }
+        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientActionReady));
+    },
+
+    _clientActionReady: function(result, error) {
+        if (error) {
+            global.logWarning("Could not initialize menu proxy: "+error);
+            //FIXME: show message to the user?
+        }
+        this._requestLayoutUpdate();
+
+        // listen for updated layouts and properties
+        //this._proxy_menu.connectSignal("LayoutUpdated", Lang.bind(this, this._onLayoutUpdated));
+        //this._proxy_menu.connectSignal("ItemsPropertiesUpdated", Lang.bind(this, this._onPropertiesUpdated));
+    }
+};
+Signals.addSignalMethods(DBusClientGtk.prototype);
 
 //////////////////////////////////////////////////////////////////////////
 // PART TWO: "View" frontend implementation.

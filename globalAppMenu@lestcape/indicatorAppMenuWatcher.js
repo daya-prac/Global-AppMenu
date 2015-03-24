@@ -358,15 +358,6 @@ IndicatorAppMenuWatcher.prototype = {
                     this._register_window_xid(xid, wind);
             }
         }
-        /*for(let xid in this._registered_windows) {
-            if(this._registered_windows[xid].application) {
-                let app = this._registered_windows[xid].application;
-                Main.notify(app.get_name() + " " + app.get_id() + " " + xid);
-            } else if(this._registered_windows[xid].window) {
-                let wind = this._registered_windows[xid].window;
-                Main.notify(wind.title + " " + xid);
-            }
-        }*/
     },
 
     _register_window_xid: function(xid, wind, menuPath, sender_dbus) {
@@ -390,14 +381,14 @@ IndicatorAppMenuWatcher.prototype = {
         if(!sender_dbus) sender_dbus = "";
 
         if (xid in this._registered_windows) {
-            if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
+            /*if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
                 Main.notify("Wrong menuPath");
             if ((sender_dbus != "") && (this._registered_windows[xid].sender != "") && (this._registered_windows[xid].sender != sender_dbus))
                 Main.notify("Wrong sender");
             if ((appT != null) && (this._registered_windows[xid].application != null) && (this._registered_windows[xid].application != appT))
                 Main.notify("Wrong application");
             if ((wind != null) && (this._registered_windows[xid].window != null) && (this._registered_windows[xid].window != wind))
-                Main.notify("Wrong window");
+                Main.notify("Wrong window");*/
 
             //this._registered_windows[xid].menuObjectPath = menuPath;
             //this._registered_windows[xid].sender = sender_dbus;

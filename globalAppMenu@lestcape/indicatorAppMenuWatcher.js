@@ -23,6 +23,8 @@ const Mainloop = imports.mainloop;
 const Signals = imports.signals;
 
 const Main = imports.ui.main;
+const Applet = imports.ui.applet;
+const PopupMenu = imports.ui.popupMenu;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
 const Util = AppletPath.util;
@@ -59,13 +61,15 @@ const stubs_blacklist = [
 /*
  * The IndicatorAppMenuWatcher class implements the IndicatorAppMenu dbus object
  */
-function IndicatorAppMenuWatcher(mode) {
-    this._init(mode);
+function IndicatorAppMenuWatcher(launcher, mode) {
+    this._init(launcher, mode);
 }
 
 IndicatorAppMenuWatcher.prototype = {
 
-    _init: function(mode) {
+    _init: function(launcher, mode) {
+        this._init_enviroment();
+
         this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(Util.DBusAppMenu, this);
         this._dbusImpl.export(Gio.DBus.session, WATCHER_OBJECT);
         this._everAcquiredName = false;
@@ -75,28 +79,130 @@ IndicatorAppMenuWatcher.prototype = {
                                   Lang.bind(this, this._lostName));
         this._registered_windows = { };
         this._nameWatcher = { };
+
         this.mode = mode;
+        this.launcher = null;
+        this.set_launcher(launcher);
 
         this.tracker = Cinnamon.WindowTracker.get_default();
-        Mainloop.timeout_add(10000, Lang.bind(this, function () {
-            try {
-            this._register_all_windows();
-            for(let xid in this._registered_windows) {
-                if(this._registered_windows[xid].application) {
-                    let app = this._registered_windows[xid].application;
-                    //Main.notify(app.get_name() + " " + app.get_id() + " " + xid);
-                } else if(this._registered_windows[xid].window) {
-                    let wind = this._registered_windows[xid].window;
-                    //Main.notify(wind.title + " " + xid);
-                }
-            }
-            } catch(e) {Main.notify("error " + e.message);}
-        }));
 
-        this.current_menu_client = null;
+        this._register_all_windows();
+
+        this.notify_workspaces_changed_id = global.screen.connect('notify::n-workspaces',
+                                            Lang.bind(this, this._register_all_windows));
         this.windows_changed_id = global.screen.get_display().connect('notify::focus-window',
                                   Lang.bind(this, this._on_window_changed));
         this._on_window_changed();
+    },
+
+    _init_enviroment: function() {
+        let is_ready = true;
+        let env_gtk = GLib.getenv('GTK_MODULES');
+        if(env_gtk) {
+            if(env_gtk.indexOf("unity-gtk-module" ) == -1) {
+                env_gtk += ":unity-gtk-module";
+                GLib.setenv('GTK_MODULES', env_gtk, true);
+                is_ready = false;
+            }
+        } else {
+            env_gtk = "unity-gtk-module";
+            GLib.setenv('GTK_MODULES', env_gtk. false);
+            is_ready = false;
+        }
+        
+        let env_ubu = GLib.getenv('UBUNTU_MENUPROXY');
+        if(env_ubu != "1") {
+            GLib.setenv('UBUNTU_MENUPROXY', "1", true);
+            is_ready = false;
+        }
+        if((!is_ready) && (this._is_cinnamon_session_start())) {
+            this._restart_nemo();
+        }
+        //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY'));
+    },
+
+    _is_cinnamon_session_start: function() {
+        let string_file = this._readFile(GLib.get_home_dir() + "/.xsession-errors")
+        return ((!string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
+    },
+
+    _restart_nemo: function() {
+        this._execCommand("nemo -q");
+        this._execCommand("nemo -n");//FIXME
+        log("restart nemoooooooooooooo");
+    },
+
+    _readFile: function(path) {
+        try {
+            let file = Gio.file_new_for_path(path);
+            if(file.query_exists(null))
+            {
+                let fstream = file.read(null);
+                let dstream = new Gio.DataInputStream({ base_stream: fstream });
+                let data = dstream.read_until("", null);
+                fstream.close(null);
+                return data.toString();
+            }
+        } catch(e) {
+            Main.notifyError(_("Error:"), e.message);
+        }
+        return null;
+    },
+
+    _execCommand: function(command) {
+        try {
+            let [success, argv] = GLib.shell_parse_argv(command);
+            this._trySpawnSync(argv);
+            return true;
+        } catch (e) {
+            let title = _("Execution of '%s' failed:").format(command);
+            Main.notifyError(title, e.message);
+        }
+        return false;
+    },
+
+    _trySpawnSync: function(argv) {
+        try {   
+            GLib.spawn_sync(null, argv, null,
+                            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_DEV_NULL  | GLib.SpawnFlags.STDERR_TO_DEV_NULL,
+                            null, null);
+        } catch (err) {
+            if (err.code == GLib.SpawnError.G_SPAWN_ERROR_NOENT) {
+                err.message = _("Command not found.");
+            } else {
+                // The exception from gjs contains an error string like:
+                //   Error invoking GLib.spawn_command_line_async: Failed to
+                //   execute child process "foo" (No such file or directory)
+                // We are only interested in the part in the parentheses. (And
+                // we can't pattern match the text, since it gets localized.)
+                err.message = err.message.replace(/.*\((.+)\)/, '$1');
+            }
+            throw err;
+        }
+    },
+
+    _trySpawnAsync: function(argv) {
+        try {   
+            GLib.spawn_async(null, argv, null,
+                             GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_DEV_NULL  | GLib.SpawnFlags.STDERR_TO_DEV_NULL,
+                             null, null);
+        } catch (err) {
+            if (err.code == GLib.SpawnError.G_SPAWN_ERROR_NOENT) {
+                err.message = _("Command not found.");
+            } else {
+                // The exception from gjs contains an error string like:
+                //   Error invoking GLib.spawn_command_line_async: Failed to
+                //   execute child process "foo" (No such file or directory)
+                // We are only interested in the part in the parentheses. (And
+                // we can't pattern match the text, since it gets localized.)
+                err.message = err.message.replace(/.*\((.+)\)/, '$1');
+            }
+            throw err;
+        }
+    },
+
+    set_launcher: function(launcher) {
+        this.launcher = launcher;
     },
 
     _acquiredName: function() {
@@ -125,7 +231,8 @@ IndicatorAppMenuWatcher.prototype = {
 /* functions */
     RegisterWindowAsync: function(params, invocation) {
         let [windowId, menuObjectPath] = params;
-        this._register_window_xid(windowId, menuObjectPath, invocation.get_sender());
+        let wind = null;
+        this._register_window_xid(windowId, wind, menuObjectPath, invocation.get_sender());
         Main.notify('RegisterWindow: ' + windowId + " " + invocation.get_sender() + " " + menuObjectPath);
         this.EmitWindowRegistered(windowId, invocation.get_sender(), menuObjectPath);
         //let retval = GLib.Variant.new('(b)', [result]);
@@ -172,40 +279,51 @@ IndicatorAppMenuWatcher.prototype = {
         Main.notify('EmitWindowUnregistered: ' + windowId);
     },
 
-    select_menu: function(xid) {
-        let window = null;
-        if(xid in this._registered_windows) {
-            this.current_menu_client = this._registered_windows[xid].appMenu;
-            window = this._registered_windows[xid].window;
-        } else {
-            this.current_menu_client = null;
-        }
-        this.emit('on_appmenu_changed', window, this.current_menu_client);
-    },
-
-    get_current_menu_client: function() {
-        return this.current_menu_client;
-    },
-
     //async because we may need to check the presence of a menubar object as well as the creation is async.
     _get_menu_client: function(xid, callback) {
-        var sender = this._registered_windows[xid].sender;
-        var path = this._registered_windows[xid].menuObjectPath;
-        this._validateMenu(sender, path, function(r, name, path) {
-            if (r) {
-                global.log("creating menu on "+[name, path]);
-                callback(xid, new DBusMenu.Client(name, path));
+        if(xid in this._registered_windows) {
+            var sender = this._registered_windows[xid].sender;
+            var path = this._registered_windows[xid].menuObjectPath;
+            var is_gtk = this._registered_windows[xid].isGtk;
+                Main.notify("holaaaaaaa1 " + " " + is_gtk + " " + sender + " " + path);
+            if((sender != "")&&(path != "")) {
+                Main.notify("holaaaaaaa2")
+                if(!is_gtk) {
+                    this._validateMenu(sender, path, function(r, name, path) {
+                        if (r) {
+                            global.log("creating menu on "+[name, path]);
+                            callback(xid, new DBusMenu.Client(name, path, is_gtk));
+                        } else {
+                            callback(xid, null);
+                        }
+                    });
+                } else {
+                    callback(xid, new DBusMenu.Client(name, path, is_gtk));
+                }
             } else {
                 callback(xid, null);
             }
-        });
+        } else {
+            callback(xid, null);
+        }
     },
 
     _on_menu_client_ready: function(xid, client) {
-        if(client != null) {
-            this._registered_windows[xid].appMenu = client;
+        if ((client != null) && (this.launcher)) {
+            let menu = new Applet.AppletPopupMenu(this.launcher, this.launcher.orientation);
+            menu.actor.add_style_class_name('menu-background');
+            let menuManager = new PopupMenu.PopupMenuManager(this.launcher);
+            menuManager.addMenu(menu);
+            client.attachToMenu(menu);
+            menu._client = client;
+            menu._manager = menuManager;
+            this._registered_windows[xid].appMenu = menu;
+            if(!this._registered_windows[xid].windows) {
+                this._register_all_windows();
+            }
+            if (this._guess_Window_XID(global.display.focus_window) == xid)
+                this._on_window_changed();
         }
-        //this.select_menu(xid);
     },
 
     _validateMenu: function(bus, path, callback) {
@@ -237,69 +355,133 @@ IndicatorAppMenuWatcher.prototype = {
             let win_list = metaWorkspace.list_windows();
             // For each window, let's make sure we add it!
             for(let pos in win_list) {
-                this._register_window(win_list[pos]);
+                let wind = win_list[pos];
+                let xid = this._guess_Window_XID(wind);
+                if(xid)
+                    this._register_window_xid(xid, wind);
             }
         }
-    },
-
-    _register_window: function (wind) {
-        try {
-            let xxid = this._guess_Window_XID(wind);
-            if(xxid != null) {
-                let appT = this.tracker.get_window_app(wind);
-                let xid = parseInt(xxid, 16);
-                if (xid in this._registered_windows) {
-                    this._registered_windows[xid].window = wind;
-                    this._registered_windows[xid].application = appT;
-                } else {
-                    this._registered_windows[xid] = {
-                        window: wind,
-                        application: appT,
-                        menuObjectPath: null,
-                        sender: null,
-                        appMenu: null
-                    };
-                }
+        /*for(let xid in this._registered_windows) {
+            if(this._registered_windows[xid].application) {
+                let app = this._registered_windows[xid].application;
+                Main.notify(app.get_name() + " " + app.get_id() + " " + xid);
+            } else if(this._registered_windows[xid].window) {
+                let wind = this._registered_windows[xid].window;
+                Main.notify(wind.title + " " + xid);
             }
-        } catch(e) {global.logWarning(e.message);}
+        }*/
     },
 
-    _register_window_xid: function(xid, menuPath, sender_dbus) {
+    _register_window_xid: function(xid, wind, menuPath, sender_dbus) {
       try {
+        if(!menuPath) menuPath = "";
+        if(!sender_dbus) sender_dbus = "";
+        let appT = null;
+        let is_gtk = false;
+        if(wind) {
+            appT = this.tracker.get_window_app(wind);
+            is_gtk = wind.get_gtk_application_id() != null;
+        }
+
         if (xid in this._registered_windows) {
-            this._registered_windows[xid].menuObjectPath = menuPath;
-            this._registered_windows[xid].sender = sender_dbus;
+            if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
+                Main.notify("Worong menuPath");
+            if ((sender_dbus != "") && (this._registered_windows[xid].sender != "") && (this._registered_windows[xid].sender != sender_dbus))
+                Main.notify("Worong sender");
+            if ((appT != null) && (this._registered_windows[xid].application != null) && (this._registered_windows[xid].application != appT))
+                Main.notify("Worong application");
+            if ((wind != null) && (this._registered_windows[xid].window != null) && (this._registered_windows[xid].window != wind))
+                Main.notify("Worong window");
+
+            //this._registered_windows[xid].menuObjectPath = menuPath;
+            //this._registered_windows[xid].sender = sender_dbus;
+            if(menuPath != "")
+                this._registered_windows[xid].menuObjectPath = menuPath;
+            if(sender_dbus != "")
+                this._registered_windows[xid].sender = sender_dbus;
+            if(appT)
+                this._registered_windows[xid].application = appT;
+            if(wind)
+                this._registered_windows[xid].window = wind;
         } else {
             this._registered_windows[xid] = {
-                window: null,
-                application: null,
+                window: wind,
+                application: appT,
                 menuObjectPath: menuPath,
                 sender: sender_dbus,
+                isGtk: is_gtk,
                 appMenu: null
             };
         }
-        this._get_menu_client(xid, Lang.bind(this, this._on_menu_client_ready));
+        if ((this.launcher) && (xid in this._registered_windows) && (!this._registered_windows[xid].appMenu)) {
+            if ((this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].sender != "")) {
+                this._get_menu_client(xid, Lang.bind(this, this._on_menu_client_ready));
+            } else if (/*(is_gtk) && */((this._registered_windows[xid].menuObjectPath == "") || (this._registered_windows[xid].sender == ""))) {
+                let terminal = new TerminalReader("xprop -id " + xid + " -notype _GTK_UNIQUE_BUS_NAME && " +
+                                                  "xprop -id " + xid + " -notype _GTK_APP_MENU_OBJECT_PATH",
+                                                  Lang.bind(this, this._on_terminal_read));
+                terminal.executeReader();
+            } 
+        }
       }catch(e){Main.notify(e.message);}
     },
 
-    _on_window_changed: function() {
-        let xid = this._get_last_focused_Window();
-        if(xid) {
-            this._register_window(global.display.focus_window);
-            this.select_menu(xid);
+    _on_terminal_read: function(command, sucess, result) {
+        if(sucess) {
+            log("out " + command + " " + result);
+            let sender_dbus = "";
+            let menuPath = "";
+            let xid = parseInt(command.substring(10, command.indexOf(" -notype")));
+            let lines = result.split("\n"); //_GTK_MENUBAR_OBJECT_PATH
+            let obj_keys = { "_GTK_UNIQUE_BUS_NAME":"", "_GTK_APP_MENU_OBJECT_PATH":"" };
+            if(this._get_values(lines, obj_keys)) {
+                log("ready >" + obj_keys["_GTK_UNIQUE_BUS_NAME"] + "<<>>" + obj_keys["_GTK_APP_MENU_OBJECT_PATH"] + "<");
+                this._registered_windows[xid].menuObjectPath = obj_keys["_GTK_APP_MENU_OBJECT_PATH"];
+                this._registered_windows[xid].sender = obj_keys["_GTK_UNIQUE_BUS_NAME"];
+                this._get_menu_client(xid, Lang.bind(this, this._on_menu_client_ready));
+            }
         }
     },
 
-    _get_last_focused_Window: function () {
-        try {
-            let wind = global.display.focus_window;
-            if(wind) {
-                let xxid = this._guess_Window_XID(wind);
-                if(xxid != null)
-                    return parseInt(xxid, 16);
+    _get_values: function(lines, obj_keys) {
+        let line_index = 0;
+        let result = true;
+        let index;
+        for (let key in obj_keys) {
+            if(line_index < lines.length) {
+                index = lines[line_index].indexOf(key + " = ");
+                if(index == 0)
+                    obj_keys[key] = lines[0].substring(key.length + 4, lines[0].length-1);
+                else
+                    result = false;
             }
-        }catch(e) {Main.notify("error " + e.message);}
+        }
+        return result;
+    },
+
+    get_menu_for_window: function(wind) {
+        let xid = this._guess_Window_XID(wind);
+        if((xid) && (xid in this._registered_windows))
+            return this._registered_windows[xid].appMenu;
         return null;
+    },
+
+    get_app_for_window: function(wind) {
+        let xid = this._guess_Window_XID(wind);
+        if((xid) && (xid in this._registered_windows))
+            return this._registered_windows[xid].application;
+        return null;
+    },
+
+    _on_window_changed: function() {
+        let wind = null;
+        let xid = this._guess_Window_XID(global.display.focus_window);
+        if((xid) && (!(xid in this._registered_windows) || (!this._registered_windows[xid].appMenu))) {
+            this._register_all_windows();
+        }
+        if(xid in this._registered_windows)
+            wind = this._registered_windows[xid].window;
+        this.emit('on_appmenu_changed', wind);
     },
 
     // NOTE: we prefer to use the window's XID but this is not stored
@@ -313,15 +495,19 @@ IndicatorAppMenuWatcher.prototype = {
     // Can match winow.get_startup_id() to WM_WINDOW_ROLE(STRING)
     // If they're not equal, then try the XID ?
     _guess_Window_XID: function (wind) {
+        if (!wind)
+            return null;
+
         let id = null;
         // if window title has non-utf8 characters, get_description() complains
         // "Failed to convert UTF-8 string to JS string: Invalid byte sequence in conversion input",
         // event though get_title() works.
+        if (wind.get_xwindow)
+            return wind.get_xwindow();
         try {
             id = wind.get_description().match(/0x[0-9a-f]+/);
             if (id) {
-                id = id[0];
-                return id;
+                return parseInt(id[0], 16);
             }
         } catch (err) {
         }
@@ -339,13 +525,13 @@ IndicatorAppMenuWatcher.prototype = {
                 let regexp = new RegExp('(0x[0-9a-f]+) +"%s"'.format(wind.title));
                 id = str.match(regexp);
                 if (id) {
-                    return id[1];
+                    return parseInt(id[1], 16);
                 }
 
                 // Otherwise, just grab the child and hope for the best
                 id = str.split(/child(?:ren)?:/)[1].match(/0x[0-9a-f]+/);
                 if (id) {
-                    return id[0];
+                    return parseInt(id[0], 16);
                 }
             }
         }
@@ -449,3 +635,155 @@ IndicatorAppMenuWatcher.prototype = {
     }*/
 };
 Signals.addSignalMethods(IndicatorAppMenuWatcher.prototype);
+
+
+function TerminalReader(command, callback) {
+   this._init(command, callback);
+}
+
+TerminalReader.prototype = {
+   _init: function(command, callback) {
+      this._callbackPipe = callback;
+      this._commandPipe = command;
+      this.idle = true;
+      this._childWatch = null;
+   },
+
+   executeReader: function() {
+      if(this.idle) {
+         this.idle = false;
+         try {
+            let [success, argv] = GLib.shell_parse_argv("sh -c '" + this._commandPipe + "'");
+            if(success) {
+               let [exit, pid, stdin, stdout, stderr] =
+                    GLib.spawn_async_with_pipes(null, /* cwd */
+                                                argv, /* args */
+                                                null, /* env */
+                                                GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.DO_NOT_REAP_CHILD, /*Use env path and no repet*/
+                                                null /* child_setup */);
+
+               this._childPid = pid;
+               this._stdin = new Gio.UnixOutputStream({ fd: stdin, close_fd: true });
+               this._stdout = new Gio.UnixInputStream({ fd: stdout, close_fd: true });
+               this._stderr = new Gio.UnixInputStream({ fd: stderr, close_fd: true });
+         
+               // We need this one too, even if don't actually care of what the process
+               // has to say on stderr, because otherwise the fd opened by g_spawn_async_with_pipes
+               // is kept open indefinitely
+               this._stderrStream = new Gio.DataInputStream({ base_stream: this._stderr });
+               this._dataStdout = new Gio.DataInputStream({ base_stream: this._stdout });
+               this._cancellableStderrStream = new Gio.Cancellable();
+               this._cancellableStdout = new Gio.Cancellable();
+
+               this.resOut = 1;
+               this._readStdout();
+               this.resErr = 1;
+               this._readStderror();
+
+               this._childWatch = GLib.child_watch_add(GLib.PRIORITY_DEFAULT, pid, Lang.bind(this, function(pid, status, requestObj) {
+                  GLib.source_remove(this._childWatch);
+                  this._childWatch = null;
+                  this._stdin.close(null);
+                  this.idle = true;
+               }));
+            }
+            //throw
+         } catch(err) {
+            if (err.code == GLib.SpawnError.G_SPAWN_ERROR_NOENT) {
+               err.message = _("Command not found.");
+            } else {
+               // The exception from gjs contains an error string like:
+               //   Error invoking GLib.spawn_command_line_async: Failed to
+               //   execute child process "foo" (No such file or directory)
+               // We are only interested in the part in the parentheses. (And
+               // we can't pattern match the text, since it gets localized.)
+               err.message = err.message.replace(/.*\((.+)\)/, '$1');
+            }
+            throw err;
+         }
+      }
+   },
+
+   destroy: function() {
+      try {
+         if(this._childWatch) {
+            GLib.source_remove(this._childWatch);
+            this._childWatch = null;
+         }
+         if(!this._dataStdout.is_closed()) {
+            this._cancellableStdout.cancel();
+            this._stdout.close_async(0, null, Lang.bind(this, this.closeStdout));
+         }
+         if(!this._stderrStream.is_closed()) {
+            this._cancellableStderrStream.cancel();
+            this._stderrStream.close_async(0, null, Lang.bind(this, this.closeStderrStream));
+         }
+         this._stdin.close(null);
+         this.idle = true;
+      }
+      catch(e) {
+         Main.notify("Error on close" + this._dataStdout.is_closed(), e.message);
+      }
+   },
+
+   closeStderrStream: function(std, result) {
+      try {
+        std.close_finish(result);
+      } catch(e) {
+         std.close_async(0, null, Lang.bind(this, this.closeStderrStream));
+      }
+   },
+
+   closeStdout: function(std, result) {
+      try {
+        std.close_finish(result);
+      } catch(e) {
+         std.close_async(0, null, Lang.bind(this, this.closeStderrStream));
+      }
+   },
+
+   _readStdout: function() {
+      this._dataStdout.fill_async(-1, GLib.PRIORITY_DEFAULT, this._cancellableStdout, Lang.bind(this, function(stream, result) {
+         try {
+            if(!this._dataStdout.is_closed()) {
+               if(this.resOut != -1)
+                  this.resOut = this._dataStdout.fill_finish(result);// end of file
+               if(this.resOut == 0) {
+                  let val = stream.peek_buffer().toString();
+                  if(val != "")
+                     this._callbackPipe(this._commandPipe, true, val);
+                  this._stdout.close(this._cancellableStdout);
+               } else {
+                  // Try to read more
+                  this._dataStdout.set_buffer_size(2 * this._dataStdout.get_buffer_size());
+                  this._readStdout();
+               }
+            }
+         } catch(e) {
+            global.log(e.toString());
+         }
+      }));
+   },
+
+   _readStderror: function() {
+      this._stderrStream.fill_async(-1, GLib.PRIORITY_DEFAULT, this._cancellableStderrStream, Lang.bind(this, function(stream, result) {
+         try {
+            if(!this._stderrStream.is_closed()) {
+               if(this.resErr != -1)
+                  this.resErr = this._stderrStream.fill_finish(result);
+               if(this.resErr == 0) { // end of file
+                  let val = stream.peek_buffer().toString();
+                  if(val != "")
+                     this._callbackPipe(this._commandPipe, false, val);
+                  this._stderr.close(null);
+               } else {
+                  this._stderrStream.set_buffer_size(2 * this._stderrStream.get_buffer_size());
+                  this._readStderror();
+               }
+            }
+         } catch(e) {
+            global.log(e.toString());
+         }
+      }));
+   }
+};

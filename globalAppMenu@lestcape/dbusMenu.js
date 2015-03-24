@@ -24,11 +24,14 @@ const Lang = imports.lang;
 const Signals = imports.signals;
 
 const PopupMenu = imports.ui.popupMenu;
+const Main = imports.ui.main;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
 const Util = AppletPath.util;
 
 const BusClientProxy = Gio.DBusProxy.makeProxyWrapper(Util.DBusMenu);
+const BusGtkClientProxy = Gio.DBusProxy.makeProxyWrapper(Util.DBusGtkMenu);
+const ActionsGtkClientProxy = Gio.DBusProxy.makeProxyWrapper(Util.ActionsGtk);
 
 
 // we list all the properties we know and use here, so we won' have to deal with unexpected type mismatches
@@ -92,6 +95,30 @@ PropertyStore.prototype = {
             return DefaultValues[name];
         else
             return null;
+    }
+};
+
+/**
+ * Saves menu property values and handles type checking and defaults
+ */
+function PropertyGtkStore(initial_properties) {
+    this._init(initial_properties);
+}
+
+PropertyGtkStore.prototype = {
+    __proto__: PropertyStore.prototype,
+
+    _init: function(initial_properties) {
+        PropertyStore.prototype._init.call(this);
+    },
+
+    set: function(name, value) {
+        /*if (name in MandatedTypes && value && !value.is_of_type(MandatedTypes[name]))
+            global.logWarning("Cannot set property "+name+": type mismatch!");
+        else*/ if (value)
+            this._props[name] = value;
+        else
+            delete this._props[name];
     }
 };
 
@@ -214,6 +241,106 @@ DbusMenuItem.prototype = {
 };
 Signals.addSignalMethods(DbusMenuItem.prototype);
 
+function DBusClientGtk(busName, busPath) {
+    this._init(busName, busPath);
+}
+
+DBusClientGtk.prototype = {
+    __proto__: DBusClient.prototype,
+
+    _init: function(busName, busPath) {
+        Main.notify("init")
+        //DBusClient.prototype._init.call(this);
+        this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, busName, busPath, Lang.bind(this, this._clientReady));
+        this._items = { "0": new DbusMenuItem(this, "0", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
+
+        // will be set to true if a layout update is requested while one is already in progress
+        // then the handler that completes the layout update will request another update
+        this._flagLayoutUpdateRequired = false;
+        this._flagLayoutUpdateInProgress = false;
+
+        // property requests are queued
+        this._propertiesRequestedFor = [ /* ids */ ];
+    },
+
+    get_root: function() {
+        return this._items["0"];
+    },
+
+    _requestLayoutUpdate: function() {
+        if (this._flagLayoutUpdateInProgress)
+            this._flagLayoutUpdateRequired = true;
+        else
+            this._beginLayoutUpdate();
+    },
+
+    // the original implementation will only request partial layouts if somehow possible
+    // we try to save us from multiple kinds of race conditions by always requesting a full layout
+    _beginLayoutUpdate: function() {
+        // we only read the type property, because if the type changes after reading all properties,
+        // the view would have to replace the item completely which we try to avoid
+        //this._proxy_menu.GetLayoutRemote(0, -1, [ 'type', 'children-display' ], Lang.bind(this, this._endLayoutUpdate));
+        let init_menu = [];
+        for(let x = 0; x < 1024; x++)
+            init_menu.push(x);
+        this._proxy_menu.StartRemote(init_menu, Lang.bind(this, this._endLayoutUpdate));
+
+        this._flagLayoutUpdateRequired = false;
+        this._flagLayoutUpdateInProgress = true;
+    },
+
+    _endLayoutUpdate: function(result, error) {
+        if (error) {
+            global.logWarning("While reading menu layout: "+error);
+            return;
+        }
+
+        Main.notify("Es> " + result);
+
+        //let [ revision, root ] = result;
+        //this._doLayoutUpdate(root);
+
+        /* fake about to show for firefox: https://bugs.launchpad.net/plasma-widget-menubar/+bug/878165
+        this._items[0].get_children_ids().forEach(function(child_id) {
+            this.send_about_to_show(child_id);
+        }, this);*/
+
+        //this._gcItems();
+
+        //if (this._flagLayoutUpdateRequired)
+        //    this._beginLayoutUpdate();
+        //else
+        //    this._flagLayoutUpdateInProgress = false;
+    },
+
+
+    _doLayoutUpdate: function(item) {
+    },
+
+
+    _clientReady: function(result, error) {
+        if (error) {
+            global.logWarning("Could not initialize menu proxy: "+error);
+            //FIXME: show message to the user?
+        }
+        Main.notify("init _clientReady")
+        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, busName, busPath, Lang.bind(this, this._clientActionReady));
+    },
+
+    _clientActionReady: function(result, error) {
+        if (error) {
+            global.logWarning("Could not initialize menu proxy: "+error);
+            //FIXME: show message to the user?
+        }
+        Main.notify("init _clientActionReadyy")
+        this._requestLayoutUpdate();
+
+        // listen for updated layouts and properties
+        //this._proxy_menu.connectSignal("LayoutUpdated", Lang.bind(this, this._onLayoutUpdated));
+        //this._proxy_menu.connectSignal("ItemsPropertiesUpdated", Lang.bind(this, this._onPropertiesUpdated));
+    }
+};
+
 /**
  * The client does the heavy lifting of actually reading layouts and distributing events
  */
@@ -317,6 +444,12 @@ DBusClient.prototype = {
 
         let [ revision, root ] = result;
         this._doLayoutUpdate(root);
+
+        /* fake about to show for firefox: https://bugs.launchpad.net/plasma-widget-menubar/+bug/878165
+        this._items[0].get_children_ids().forEach(function(child_id) {
+            this.send_about_to_show(child_id);
+        }, this);*/
+
         this._gcItems();
 
         if (this._flagLayoutUpdateRequired)
@@ -370,7 +503,7 @@ DBusClient.prototype = {
             this._requestProperties(id);
         }
 
-        return id
+        return id;
     },
 
     _clientReady: function(result, error) {
@@ -443,13 +576,6 @@ Signals.addSignalMethods(DBusClient.prototype);
 //////////////////////////////////////////////////////////////////////////
 // PART TWO: "View" frontend implementation.
 //////////////////////////////////////////////////////////////////////////
-
-// https://bugzilla.gnome.org/show_bug.cgi?id=731514
-// GNOME 3.10 and 3.12 can't open a nested submenu.
-// Patches have been written, but it's not clear when (if?) they will be applied.
-// We also don't know whether they will be backported to 3.10, so we will work around
-// it in the meantime. Offending versions can be clearly identified:
-const NEED_NESTED_SUBMENU_FIX = '_setOpenedSubMenu' in PopupMenu.PopupMenu.prototype;
 
 /**
  * Creates new wrapper menu items and injects methods for managing them at runtime.
@@ -550,7 +676,9 @@ const MenuItemFactory = {
         if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem) {
             let children = dbusItem.get_children();
             for (let i = 0; i < children.length; ++i) {
-                shellItem.menu.addMenuItem(MenuItemFactory.createItem(client, children[i]));
+                let ch_item = MenuItemFactory.createItem(client, children[i]);
+                ch_item._parent = shellItem;
+                shellItem.menu.addMenuItem(ch_item);
             }
         }
 
@@ -575,18 +703,6 @@ const MenuItemFactory = {
 
     _onOpenStateChanged: function(menu, open) {
         if (open) {
-            if (NEED_NESTED_SUBMENU_FIX) {
-                // close our own submenus
-                if (menu._openedSubMenu)
-                    menu._openedSubMenu.close(false);
-
-                // register ourselves and close sibling submenus
-                if (menu._parent._openedSubMenu && menu._parent._openedSubMenu !== menu)
-                    menu._parent._openedSubMenu.close(true);
-
-                menu._parent._openedSubMenu = menu;
-            }
-
             this._dbusItem.handle_event("opened", null, 0);
             this._dbusItem.send_about_to_show();
         } else {
@@ -696,21 +812,22 @@ const MenuItemFactory = {
 
         // first, we need to find our old position
         let pos = -1;
-        let family = this._parent._getMenuItems();
-        for (let i = 0; i < family.length; ++i) {
-            if (family[i] === this)
-                pos = i;
+        if(this._parent) {
+            let family = this._parent._getMenuItems();
+            for (let i = 0; i < family.length; ++i) {
+                if (family[i] === this)
+                    pos = i;
+            }
         }
 
-        if (pos < 0)
-            throw new Error("DBusMenu: can't replace non existing menu item");
-
-
-        // add our new self while we're still alive
-        this._parent.addMenuItem(newSelf, pos);
-
-        // now destroy our old self
-        this.destroy();
+        if (pos < 0) {
+            //throw new Error("DBusMenu: can't replace non existing menu item");
+        } else {
+            // add our new self while we're still alive
+            this._parent.addMenuItem(newSelf, pos);
+            // now destroy our old self
+            this.destroy();
+        }
     }
 }
 
@@ -746,17 +863,23 @@ const MenuUtils = {
  *
  * Something like a mini-god-object
  */
-function Client(busName, path) {
-    this._init(busName, path);
+function Client(busName, path, is_gtk) {
+    this._init(busName, path, is_gtk);
 }
 
 Client.prototype = {
 
-    _init: function(busName, path) {
+    _init: function(busName, path, is_gtk) {
+            Main.notify("init aaaaaaabbbbbbbbbbbb");
         //this.parent();
         this._busName  = busName;
         this._busPath  = path;
-        this._client   = new DBusClient(busName, path);
+        this._is_gtk  = is_gtk;
+        if(is_gtk) {
+            Main.notify("init aaaaaaa");
+            this._client = new DBusClientGtk(busName, path);
+        } else
+            this._client = new DBusClient(busName, path);
         this._rootMenu = null; // the shell menu
         this._rootItem = null; // the DbusMenuItem for the root
 
@@ -774,9 +897,6 @@ Client.prototype = {
 
             // cleanup: remove existing childs (just in case)
             this._rootMenu.removeAll();
-
-            if (NEED_NESTED_SUBMENU_FIX)
-                menu._setOpenedSubMenu = Lang.bind(this, this._setOpenedSubmenu);
 
             // connect handlers
             Util.connectAndSaveId(menu, {

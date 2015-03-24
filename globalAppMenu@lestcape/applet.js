@@ -29,16 +29,11 @@ MyApplet.prototype = {
             this.set_applet_tooltip("Global application menu");
             this.status_notifier_watcher = null;
             this._indicator_icons = [];
+            this.icon_signal_id = 0;
+            this.label_signal_id = 0;
 
             this.settings = new Settings.AppletSettings(this, this.uuid, instance_id);
-            //this.settings.bindProperty(Settings.BindingDirection.IN,
-            //    "indicator-location", "indicator_location", this._on_indicator_location_change, null);
-            this.menuManager = new PopupMenu.PopupMenuManager(this);
-            this.menu = new Applet.AppletPopupMenu(this, this.orientation);
-            //this.menu = new ConfigurableMenus.ConfigurableMenuApplet(this, this.orientation);
-            this.menuManager.addMenu(this.menu); 
-            this.menu.actor.add_style_class_name('menu-background');
-            this.indicatorDbus = new IndicatorAppMenuWatcher.IndicatorAppMenuWatcher(IndicatorAppMenuWatcher.AppmenuMode.MODE_STANDARD);
+            this.indicatorDbus = new IndicatorAppMenuWatcher.IndicatorAppMenuWatcher(this, IndicatorAppMenuWatcher.AppmenuMode.MODE_STANDARD);
             this.indicatorDbus.connect('on_appmenu_changed', Lang.bind(this, this._on_appmenu_changed));
         }
 	catch(e) {
@@ -47,24 +42,35 @@ MyApplet.prototype = {
         }
     },
 
-    _on_appmenu_changed: function(indicator, window, menu_client) {
+    _on_appmenu_changed: function(indicator, window) {
       try {
+        if((this.menu) && (this.menu.isOpen))
+            this.menu.close();
+        this.menu = null;
+        if(this.icon_signal_id > 0)
+            this.actorIcon.disconnect(this.icon_signal_id);
+        if(this.label_signal_id > 0)
+            this.actorlabel.disconnect(this.label_signal_id);
+        this.icon_signal_id = 0;
+        this.label_signal_id = 0;
         this.actor.destroy_all_children();
         if(window) {
-            let tracker = Cinnamon.WindowTracker.get_default();
-            let app = tracker.get_window_app(window);
+            let app = this.indicatorDbus.get_app_for_window(window);
             if(app) {
+                //Main.notify("app found" + app.get_name());
                 let icon = app.create_icon_texture(this._panelHeight);
-                let actorlabel = new St.Label({ style_class: 'applet-label', reactive: true, track_hover: true, text: app.get_name() });
-                let actorIcon = new St.BoxLayout({ style_class: 'applet-box', reactive: true, track_hover: true });
-                actorIcon.add(icon, { y_align: St.Align.MIDDLE, y_fill: false });
-                this.actor.add(actorIcon, { y_align: St.Align.MIDDLE, y_fill: false });
-                this.actor.add(actorlabel, { y_align: St.Align.MIDDLE, y_fill: false });
-
-                if(menu_client) {
-                    menu_client.attachToMenu(this.menu);
-                    actorIcon.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
-                    actorlabel.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
+                this.actorlabel = new St.Label({ style_class: 'applet-label', reactive: true, track_hover: true, text: app.get_name() });
+                this.actorIcon = new St.BoxLayout({ style_class: 'applet-box', reactive: true, track_hover: true });
+                this.actorIcon.add(icon, { y_align: St.Align.MIDDLE, y_fill: false });
+                this.actor.add(this.actorIcon, { y_align: St.Align.MIDDLE, y_fill: false });
+                this.actor.add(this.actorlabel, { y_align: St.Align.MIDDLE, y_fill: false });
+                
+                this.menu = this.indicatorDbus.get_menu_for_window(window);
+                if(this.menu) {
+                    this.icon_signal_id = this.actorIcon.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
+                    this.label_signal_id = this.actorlabel.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
+                } else {
+                    //Main.notify("menu not found " + app.get_name());
                 }
             } else {
                 Main.notify("app not found");
@@ -79,7 +85,7 @@ MyApplet.prototype = {
     _onIconButtonPressEvent: function(actor, event) {
         if((this._draggable)&&(!this._draggable.inhibit))
             return false;
-        if(event.get_button() == 1) {
+        if((this.menu) && (event.get_button() == 1)) {
             this.menu.toggle();
         }
         return false;

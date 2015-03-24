@@ -47,10 +47,10 @@ In order to successfully resolve the issues you need to provide some data:
 * Bugs which don't provide the necessary information may be closed as "invalid" without prior notice.
 
 To report bugs, request new features and make suggestions, please visit:
-https://github.com/lestcape/Configurable-Menu/issues
+https://github.com/lestcape/Global-AppMenu/issues
 
 You can also send us pull requests:
-https://github.com/lestcape/Configurable-Menu/pulls
+https://github.com/lestcape/Global-AppMenu/pulls
 
 Installation Instructions:
 --------------

@@ -27,6 +27,8 @@ const Properties = loadInterfaceXml("Properties.xml");
 const StatusNotifierWatcher = loadInterfaceXml("StatusNotifierWatcher.xml");
 const DBusMenu = loadInterfaceXml("DBusMenu.xml");
 const DBusAppMenu = loadInterfaceXml("DBusAppmenu.xml");
+const DBusGtkMenu = loadInterfaceXml("DBusGtkMenu.xml");
+const ActionsGtk = loadInterfaceXml("ActionsGtk.xml");
 
 
 /**

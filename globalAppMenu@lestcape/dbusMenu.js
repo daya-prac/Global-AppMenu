@@ -135,7 +135,10 @@ DbusMenuItem.prototype = {
     _init: function(client, id, properties, children_ids) {
         this._client = client;
         this._id = id;
-        this._propStore = new PropertyStore(properties);
+        if (client instanceof DBusClientGtk)
+            this._propStore = new PropertyGtkStore(properties);
+        else
+            this._propStore = new PropertyStore(properties);
         this._children_ids = children_ids;
     },
 
@@ -487,7 +490,7 @@ DBusClientGtk.prototype = {
         this.gtk_menubar_menus = null;
         this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
         //FIXME we need to translate the id to the appmenu way?
-        this._items = { "0": new DbusMenuItem(this, "0", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
+        this._items = { "-1": new DbusMenuItem(this, "-1", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
 
         // will be set to true if a layout update is requested while one is already in progress
         // then the handler that completes the layout update will request another update
@@ -499,7 +502,7 @@ DBusClientGtk.prototype = {
     },
 
     get_root: function() {
-        return this._items["0"];
+        return this._items["-1"];
     },
 
     _requestLayoutUpdate: function() {
@@ -532,17 +535,17 @@ DBusClientGtk.prototype = {
 
         //Now unpack the menu and create a fake root item?
         if((result) && (result[0])) {
-            this.gtk_menubar_menus = { "0":[] };
-            let root_menu = this.gtk_menubar_menus["0"];
-
+            this.gtk_menubar_menus = { "-1":[] };
+            let root_menu = this.gtk_menubar_menus["-1"];
+            //Main.notify("Newwwwwwwwwwwww " + result[0]);
             result[0].forEach(function([menu_pos, section_pos, section_items]) {
                 this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
-
-                if(menu_pos == 0)
-                    this.gtk_menubar_menus["0"].push({":submenu": GLib.Variant.new("(uu)", [menu_pos, section_pos])});
+                //Main.notify("" + menu_pos + "" + section_pos);
+                if((menu_pos == 0))
+                    this.gtk_menubar_menus["-1"].push({":submenu": GLib.Variant.new("(uu)", [menu_pos, section_pos])});
             }, this);
-
-            this._doLayoutUpdate("0");
+            //Main.notify("Endddddddddddddddddd " + Object.keys(this.gtk_menubar_menus));
+            this._doLayoutUpdate("-1", { "children-display": "submenu" } );
         }
 
         //this._gcItems();
@@ -553,29 +556,46 @@ DBusClientGtk.prototype = {
         //    this._flagLayoutUpdateInProgress = false;
     },
 
-    _doLayoutUpdate: function(id) {
+    _doLayoutUpdate: function(id, properties) {
         //Main.notify("Gtk Menu Is: " + menu + " " + section + " " + items);
         try {
         let item = this.gtk_menubar_menus[id];
         if(this.gtk_menubar_menus) {
-            let properties = {}; //FIXME
+            //let properties = {}; //FIXME
             let children_ids = [];
-            let id_sub;
-            for(pos in item) {
-                let menu_section = item[pos];
-                if(":submenu" in menu_section) {
-                    let new_pos = menu_section[":submenu"].deep_unpack();
-                    id_sub = "" + new_pos[0] + new_pos[1];
-                    //Main.notify("Gtk Menu id is: " + id_sub);
-                    children_ids.push(id_sub);
-                    this._doLayoutUpdate(id_sub);
-                }
-                if(":section" in menu_section) {
-                    let new_pos = menu_section[":section"].deep_unpack();
-                    let id_sub = "" + new_pos[0] + new_pos[1];
-                    //Main.notify("Gtk Menu id is: " + id_sub);
-                    children_ids.push(id_sub)
-                    this._doLayoutUpdate(id_sub);
+            let menu_section, id_sub, new_pos;
+            if(id in this.gtk_menubar_menus) {
+                for(pos in item) {
+                    menu_section = item[pos];
+                    menu_section["type"] = GLib.Variant.new_string("standard");
+                    if(":section" in menu_section) {
+                        new_pos = menu_section[":section"].deep_unpack();
+                        //Main.notify("section " + new_pos);
+                        id_sub = "" + new_pos[0] + new_pos[1];
+                        children_ids.push(id_sub);
+                        //Main.notify("Gtk Menu id is: " + id_sub);
+                        menu_section["children-display"] = GLib.Variant.new_string("section");
+                        //Main.notify(id_sub);
+                        if (!(id in this._items))
+                           this._doLayoutUpdate(id_sub, menu_section);
+                    }
+                    else if(":submenu" in menu_section) {
+                        new_pos = menu_section[":submenu"].deep_unpack();
+                        //Main.notify("submenu " + new_pos);
+                        id_sub = "" + new_pos[0] + new_pos[1];
+                        children_ids.push(id_sub);
+                        //Main.notify("Gtk Menu id is: " + id_sub);
+                        menu_section["children-display"] = GLib.Variant.new_string("submenu");
+                        //Main.notify(id_sub);
+                        //if (!(id in this._items))
+                        this._doLayoutUpdate(id_sub, menu_section);
+                    } else {
+                        id_sub = "" + id + "" + pos;
+                        children_ids.push(id_sub);
+                        //Main.notify("solo " + id_sub);
+                        if (!(id in this._items))
+                        this._doLayoutUpdate(id_sub, menu_section);
+                    }
                 }
             }
 
@@ -703,6 +723,8 @@ const MenuItemFactory = {
         // first, decide whether it's a submenu or not
         if (dbusItem.property_get("children-display") == "submenu")
             var shellItem = new PopupMenu.PopupSubMenuMenuItem("FIXME");
+        else if (dbusItem.property_get("children-display") == "section")
+            var shellItem = new PopupMenu.PopupMenuSection();
         else if (dbusItem.property_get("type") == "separator")
             var shellItem = new PopupMenu.PopupSeparatorMenuItem('');
         else
@@ -744,6 +766,14 @@ const MenuItemFactory = {
                 let ch_item = MenuItemFactory.createItem(client, children[i]);
                 ch_item._parent = shellItem;
                 shellItem.menu.addMenuItem(ch_item);
+            }
+        }
+        if (shellItem instanceof PopupMenu.PopupMenuSection) {
+            let children = dbusItem.get_children();
+            for (let i = 0; i < children.length; ++i) {
+                let ch_item = MenuItemFactory.createItem(client, children[i]);
+                ch_item._parent = shellItem;
+                shellItem.addMenuItem(ch_item);
             }
         }
 
@@ -797,33 +827,42 @@ const MenuItemFactory = {
     },
 
     _onChildAdded: function(dbusItem, child, position) {
-        if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
+        if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
+            this.menu.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
+        } else if (this instanceof PopupMenu.PopupMenuSection) {
+            this.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
+        } else {
             Util.Logger.warn("Tried to add a child to non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
-        } else {
-            this.menu.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
         }
     },
 
     _onChildRemoved: function(dbusItem, child) {
-        if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
-            Util.Logger.warn("Tried to remove a child from non-submenu item. Better recreate it as whole");
-            MenuItemFactory._replaceSelf.call(this);
-        } else {
+        if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
             // find it!
             this.menu._getMenuItems().forEach(function(item) {
                 if (item._dbusItem == child)
                     item.destroy();
             });
+        } else if (this instanceof PopupMenu.PopupMenuSection) {
+            this._getMenuItems().forEach(function(item) {
+                if (item._dbusItem == child)
+                    item.destroy();
+            });
+        } else {
+            Util.Logger.warn("Tried to remove a child from non-submenu item. Better recreate it as whole");
+            MenuItemFactory._replaceSelf.call(this);
         }
     },
 
     _onChildMoved: function(dbusItem, child, oldpos, newpos) {
-        if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
+        if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
+            MenuUtils.moveItemInMenu(this.menu, child, newpos);
+        } else if (this instanceof PopupMenu.PopupMenuSection) {
+            MenuUtils.moveItemInMenu(this, child, newpos);
+        } else {
             Util.Logger.warn("Tried to move a child in non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
-        } else {
-            MenuUtils.moveItemInMenu(this.menu, child, newpos);
         }
     },
 

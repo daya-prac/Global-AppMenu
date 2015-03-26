@@ -27,6 +27,7 @@ const PopupMenu = imports.ui.popupMenu;
 const Main = imports.ui.main;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
+const ConfigurableMenus = AppletPath.configurableMenus;
 const Util = AppletPath.util;
 
 const BusClientProxy = Gio.DBusProxy.makeProxyWrapper(Util.DBusMenu);
@@ -44,14 +45,22 @@ const MandatedTypes = {
     'icon-name'         : GLib.VariantType.new("s"),
     'icon-data'         : GLib.VariantType.new("ay"),
     'toggle-type'       : GLib.VariantType.new("s"),
-    'toggle-state'      : GLib.VariantType.new("i")
+    'toggle-state'      : GLib.VariantType.new("i"),
+    'action'            : GLib.VariantType.new("s"),
+    'target'            : GLib.VariantType.new("v"),
+    'accel'             : GLib.VariantType.new("s"),
+    'param-type'        : GLib.VariantType.new("g"),
+    'parameters'        : GLib.VariantType.new("av")
 };
 
 const DefaultValues = {
-    'visible': GLib.Variant.new_boolean(true),
-    'enabled': GLib.Variant.new_boolean(true),
-    'label'  : GLib.Variant.new_string(''),
-    'type'   : GLib.Variant.new_string("standard")
+    'visible'    : GLib.Variant.new_boolean(true),
+    'enabled'    : GLib.Variant.new_boolean(true),
+    'label'      : GLib.Variant.new_string(""),
+    'type'       : GLib.Variant.new_string("standard"),
+    'action'     : GLib.Variant.new_string(""),
+    'accel'      : GLib.Variant.new_string(""),
+    'param-type' : GLib.Variant.new_string("")
     // elements not in here must return null
 };
 
@@ -495,6 +504,7 @@ DBusClientGtk.prototype = {
         this._busName = busName;
         this._busPath = busPath;
         this.gtk_menubar_menus = null;
+        this.labels_ids = {};
 
         this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
         //FIXME we need to translate the id to the appmenu way?
@@ -512,9 +522,74 @@ DBusClientGtk.prototype = {
     },
 
     _get_init_id: function() {
-        return "02"; //FIXME need to be 00
+        return "02"; //FIXME will start always on 02?
     },
 
+    _requestActionsUpdate: function() {
+        let action_ids = [];
+        this._proxy_action.DescribeAllRemote(Lang.bind(this, this._endActionsUpdate));
+    },
+
+    _endActionsUpdate: function(result, error) {//FIXME not all values are updated.
+        if (error) {
+            global.logWarning("While reading menu actions: "+error);
+            return;
+        }
+        if((result) && (result[0])) {
+          try {
+            //Main.notify("act" + Object.keys(result[0]))
+            let properties_hash = result[0];
+            let isNotCreate = false;
+            for(let action_id in properties_hash) {
+                if((isNotCreate)&&(!(action_id in this.actions_ids))) {
+                    isNotCreate = true;
+                    this._create_labels_ids();
+                }
+                let id = this.actions_ids[action_id];
+                if (!(id in this._items))
+                    return;
+
+                let properties = properties_hash[action_id];
+                this._items[id].property_set("enabled", GLib.Variant.new_boolean(properties[0]));
+                if(properties[1])
+                    this._items[id].property_set("param-type", GLib.Variant.new("g", properties[1]));
+                else
+                    this._items[id].property_set("param-type", GLib.Variant.new("g", ""));
+
+                if(properties[2])
+                    this._items[id].property_set("parameters", properties[2]);
+            }
+          } catch(e) {Main.notify("" + e.message);}
+        }
+    },
+
+    _create_actions_ids: function() {
+        this.actions_ids = {};//FIXME add and remove better?
+        for(let id in this._items) {
+            let action_id = this._items[id].property_get("action");
+            if(action_id) {
+                this.actions_ids[action_id.replace("unity.", "")] = id;
+            }
+        }
+        //Main.notify("val" + Object.keys(this.actions_ids));
+    },
+/*
+    _convert_property: function(v) {
+        if (isinstance(v, basestring))
+            return unicode(v);
+        if isinstance(v, dbus.Struct)
+            return tuple(convert(val) for val in v);
+        if isinstance(v, list)
+            return [convert(val) for val in v];
+        if isinstance(v, dict)
+            return {convert(k):convert(val) for k, val in v.iteritems()};
+        if isinstance(v, dbus.Boolean)
+            return bool(v);
+        if isinstance(v, (dbus.UInt32, dbus.UInt16))
+            return int(v);
+        return v;
+    },
+*/
     _requestLayoutUpdate: function() {
         if (this._flagLayoutUpdateInProgress)
             this._flagLayoutUpdateRequired = true;
@@ -557,6 +632,7 @@ DBusClientGtk.prototype = {
         }
 
         this._gcItems();
+        this._create_actions_ids();
 
         if (this._flagLayoutUpdateRequired)
             this._beginLayoutUpdate();
@@ -572,7 +648,7 @@ DBusClientGtk.prototype = {
             let children_ids = [];
             let menu_section, id_sub, new_pos;
             if(id in this.gtk_menubar_menus) {
-                for(pos in item) {
+                for(let pos in item) {
                     menu_section = item[pos];
                     menu_section["type"] = GLib.Variant.new_string("standard");
                     if(":section" in menu_section) {
@@ -635,6 +711,36 @@ DBusClientGtk.prototype = {
         return id;
     },
 
+    send_about_to_show: function(id) {
+    },
+
+    send_event: function(id, event, params, timestamp) {//FIXME no match signal id
+        //params = [];
+        //let plataform = {};
+        params = null;
+        let plataform = null;
+        //Main.notify("" + id)
+        let action_id = this._items[id].property_get("action");
+        if(action_id) {
+            this._proxy_action.ActivateRemote(action_id.replace("unity.", ""), params, plataform, function(result, error) { /* we don't care */ })
+            //this._proxy_menu.ActivateRemote(id, event, params, timestamp, function(result, error) { /* we don't care */ });
+        }
+    },
+
+    destroy: function() {
+        this.emit('destroy');
+
+        Signals._disconnectAll.apply(this._proxy);
+
+        let init_menu = [];
+        for (let x = 0; x < 1024; x++) { init_menu.push(x); }
+        this._proxy_menu.EndRemote(init_menu, Lang.bind(this, function(result, error) {/*Nothing to do*/ }));
+        this._proxy_menu = null;
+    },
+
+    _onLayoutUpdated: function() {
+        this._requestLayoutUpdate();
+    },
 
     _clientReady: function(result, error) {
         if (error) {
@@ -650,10 +756,11 @@ DBusClientGtk.prototype = {
             //FIXME: show message to the user?
         }
         this._requestLayoutUpdate();
+        this._requestActionsUpdate();
 
         // listen for updated layouts and properties
-        //this._proxy_menu.connectSignal("LayoutUpdated", Lang.bind(this, this._onLayoutUpdated));
-        //this._proxy_menu.connectSignal("ItemsPropertiesUpdated", Lang.bind(this, this._onPropertiesUpdated));
+        //this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
+        //this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
     }
 };
 Signals.addSignalMethods(DBusClientGtk.prototype);
@@ -721,10 +828,10 @@ const MenuItemFactory = {
 
     createItem: function(client, dbusItem) {
         // first, decide whether it's a submenu or not
-        if ((dbusItem.property_get("children-display") == "submenu") || (dbusItem.property_get("children-display") == "section"))
+        if (dbusItem.property_get("children-display") == "submenu")
             var shellItem = new PopupMenu.PopupSubMenuMenuItem("FIXME");
         else if (dbusItem.property_get("children-display") == "section")
-            var shellItem = new PopupMenu.PopupMenuSection();
+            var shellItem = new ConfigurableMenus.PopupMenuSectionMenuItem();
         else if (dbusItem.property_get("type") == "separator")
             var shellItem = new PopupMenu.PopupSeparatorMenuItem('');
         else
@@ -766,14 +873,6 @@ const MenuItemFactory = {
                 let ch_item = MenuItemFactory.createItem(client, children[i]);
                 ch_item._parent = shellItem;
                 shellItem.menu.addMenuItem(ch_item);
-            }
-        }
-        if (shellItem instanceof PopupMenu.PopupMenuSection) {
-            let children = dbusItem.get_children();
-            for (let i = 0; i < children.length; ++i) {
-                let ch_item = MenuItemFactory.createItem(client, children[i]);
-                ch_item._parent = shellItem;
-                shellItem.addMenuItem(ch_item);
             }
         }
 
@@ -829,8 +928,6 @@ const MenuItemFactory = {
     _onChildAdded: function(dbusItem, child, position) {
         if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
             this.menu.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
-        } else if (this instanceof PopupMenu.PopupMenuSection) {
-            this.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
         } else {
             Util.Logger.warn("Tried to add a child to non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
@@ -844,11 +941,6 @@ const MenuItemFactory = {
                 if (item._dbusItem == child)
                     item.destroy();
             });
-        } else if (this instanceof PopupMenu.PopupMenuSection) {
-            this._getMenuItems().forEach(function(item) {
-                if (item._dbusItem == child)
-                    item.destroy();
-            });
         } else {
             Util.Logger.warn("Tried to remove a child from non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
@@ -858,8 +950,6 @@ const MenuItemFactory = {
     _onChildMoved: function(dbusItem, child, oldpos, newpos) {
         if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
             MenuUtils.moveItemInMenu(this.menu, child, newpos);
-        } else if (this instanceof PopupMenu.PopupMenuSection) {
-            MenuUtils.moveItemInMenu(this, child, newpos);
         } else {
             Util.Logger.warn("Tried to move a child in non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);

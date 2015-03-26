@@ -17,10 +17,34 @@
 const PopupMenu = imports.ui.popupMenu;
 const BoxPointer = imports.ui.boxpointer;
 const Clutter = imports.gi.Clutter;
+const Gtk = imports.gi.Gtk;
 const Main = imports.ui.main;
 const St = imports.gi.St;
 const Tweener = imports.ui.tweener;
+const Lang = imports.lang;
 
+function PopupMenuSectionMenuItem() {
+    this._init.apply(this, arguments);
+}
+
+PopupMenuSectionMenuItem.prototype = {
+    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
+
+    _init: function() {
+        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+        this.actor.add_style_class_name('popup-submenu-menu-item');
+        this.actor.add_style_class_name('popup-section-menu-item');
+        this.menu = new PopupMenu.PopupSubMenu(this.actor);
+        this.menu.actor.show();
+    },
+
+    _onKeyPressEvent: function(actor, event) {
+        return PopupMenu.PopupBaseMenuItem.prototype._onKeyPressEvent.call(this, actor, event);
+    },
+
+    activate: function(event) { },
+    _onButtonReleaseEvent: function(actor) {}
+};
 
 function ConfigurablePointer(arrowSide, binProperties) {
    this._init(arrowSide, binProperties);
@@ -1219,7 +1243,6 @@ ConfigurablePopupSwitchMenuItem.prototype = {
     }
 };
 
-
 function ConfigurableMenuApplet(launcher, orientation) {
    this._init(launcher, orientation);
 }
@@ -1232,6 +1255,7 @@ ConfigurableMenuApplet.prototype = {
       this.launcher = launcher;
       this.orientation = orientation;
       this.actor = this.box;
+      this.actor.vertical = false;
    },
 
    open: function() {
@@ -1240,9 +1264,9 @@ ConfigurableMenuApplet.prototype = {
 
    close: function() {
       this.actor.hide();
-   }
+   },
 };
-
+/*
 function ConfigurableSubMenuMenuItem() {
     this._init.apply(this, arguments);
 }
@@ -1277,4 +1301,4 @@ ConfigurableMenuTextIconItem.prototype = {
 
    set_orientation: function(orientation) {
    }
-};
+};*/

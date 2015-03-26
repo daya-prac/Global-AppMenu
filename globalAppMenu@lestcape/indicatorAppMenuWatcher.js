@@ -17,6 +17,7 @@
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Cinnamon = imports.gi.Cinnamon;
+const Gtk = imports.gi.Gtk;
 
 const Lang = imports.lang;
 const Mainloop = imports.mainloop;
@@ -27,6 +28,7 @@ const Applet = imports.ui.applet;
 const PopupMenu = imports.ui.popupMenu;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
+const ConfigurableMenus = AppletPath.configurableMenus;
 const Util = AppletPath.util;
 const DBusMenu = AppletPath.dbusMenu;
 
@@ -97,6 +99,8 @@ IndicatorAppMenuWatcher.prototype = {
 
     _init_enviroment: function() {
         let is_ready = true;
+        let gtk_settings = Gtk.Settings.get_default();
+        gtk_settings.set_property('gtk-shell-shows-menubar', true); //FIXME
         let env_gtk = GLib.getenv('GTK_MODULES');
         if(env_gtk) {
             if(env_gtk.indexOf("unity-gtk-module" ) == -1) {
@@ -106,7 +110,7 @@ IndicatorAppMenuWatcher.prototype = {
             }
         } else {
             env_gtk = "unity-gtk-module";
-            GLib.setenv('GTK_MODULES', env_gtk. false);
+            GLib.setenv('GTK_MODULES', env_gtk, true);
             is_ready = false;
         }
         
@@ -115,21 +119,35 @@ IndicatorAppMenuWatcher.prototype = {
             GLib.setenv('UBUNTU_MENUPROXY', "1", true);
             is_ready = false;
         }
-        /*if((!is_ready) && (this._is_cinnamon_session_start())) {
-            this._restart_nemo();
-        }*/
-        //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY'));
+        //if((!is_ready) && (this._is_cinnamon_session_start())) {
+        //    this._restart_browser();
+        //}
+        log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
     },
 
     _is_cinnamon_session_start: function() {
         let string_file = this._readFile(GLib.get_home_dir() + "/.xsession-errors");
-        return ((string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
+        return ((!string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
     },
 
-    _restart_nemo: function() {
-        //this._execCommand("nemo -q");
-        //this._execCommand("nemo -n");//FIXME
-        log("restart nemoooooooooooooo");
+    _restart_browser: function() {//FIXME
+        let listShemas = Gio.Settings.list_schemas();
+        if(listShemas.indexOf("org.gnome.desktop.background") != -1) {
+            let settings = new Gio.Settings({ schema: "org.gnome.desktop.background" });
+            if((settings)&&(settings.get_boolean("show-desktop-icons"))) {
+                this._execCommand("nautilus -q");
+                this._execCommand("nautilus -n");
+                log("restart nautilus");
+            }
+        }
+        if(listShemas.indexOf("org.nemo.desktop") != -1) {
+            let settings = new Gio.Settings({ schema: "org.nemo.desktop" });
+            if((settings)&&(settings.get_boolean("show-desktop-icons"))) {
+                this._execCommand("nemo -q");
+                this._execCommand("nemo -n");
+                log("restart nemo");
+            }
+        }
     },
 
     _readFile: function(path) {
@@ -164,7 +182,7 @@ IndicatorAppMenuWatcher.prototype = {
     _trySpawnSync: function(argv) {
         try {   
             GLib.spawn_sync(null, argv, null,
-                            GLib.SpawnFlags.SEARCH_PATH | GLib.SpawnFlags.STDOUT_TO_DEV_NULL  | GLib.SpawnFlags.STDERR_TO_DEV_NULL,
+                            GLib.SpawnFlags.SEARCH_PATH,//| GLib.SpawnFlags.STDOUT_TO_DEV_NULL  | GLib.SpawnFlags.STDERR_TO_DEV_NULL,
                             null, null);
         } catch (err) {
             if (err.code == GLib.SpawnError.G_SPAWN_ERROR_NOENT) {
@@ -308,6 +326,7 @@ IndicatorAppMenuWatcher.prototype = {
     _on_menu_client_ready: function(xid, client) {
         if ((client != null) && (this.launcher)) {
             let menu = new Applet.AppletPopupMenu(this.launcher, this.launcher.orientation);
+            //let menu = new ConfigurableMenus.ConfigurableMenuApplet(this.launcher, this.launcher.orientation);
             menu.actor.add_style_class_name('menu-background');
             let menuManager = new PopupMenu.PopupMenuManager(this.launcher);
             menuManager.addMenu(menu);
@@ -321,7 +340,7 @@ IndicatorAppMenuWatcher.prototype = {
             if (this._guess_Window_XID(global.display.focus_window) == xid)
                 this._on_window_changed();
         }
-    },
+    }, //global->ibus_window
 
     _validateMenu: function(bus, path, callback) {
         Gio.DBus.session.call(
@@ -382,7 +401,7 @@ IndicatorAppMenuWatcher.prototype = {
 
         if (xid in this._registered_windows) {
             /*if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
-                Main.notify("Wrong menuPath");
+                Main.notify("Wrong menuPath " + this._registered_windows[xid].window + " " + wind.title);
             if ((sender_dbus != "") && (this._registered_windows[xid].sender != "") && (this._registered_windows[xid].sender != sender_dbus))
                 Main.notify("Wrong sender");
             if ((appT != null) && (this._registered_windows[xid].application != null) && (this._registered_windows[xid].application != appT))
@@ -392,6 +411,9 @@ IndicatorAppMenuWatcher.prototype = {
 
             //this._registered_windows[xid].menuObjectPath = menuPath;
             //this._registered_windows[xid].sender = sender_dbus;
+
+            //FIXME firefox is who called the Wrong menuPath, so is here the problem?
+            //if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath == "")) 
             if(menuPath != "")
                 this._registered_windows[xid].menuObjectPath = menuPath;
             if(sender_dbus != "")

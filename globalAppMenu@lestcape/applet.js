@@ -69,6 +69,7 @@ MyApplet.prototype = {
                 if(this.menu) {
                     this.icon_signal_id = this.actorIcon.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
                     this.label_signal_id = this.actorlabel.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
+                    //this.actor.add(this.menu.actor, { y_align: St.Align.MIDDLE, y_fill: false });
                 } else {
                     //Main.notify("menu not found " + app.get_name());
                 }

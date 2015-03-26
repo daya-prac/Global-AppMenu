@@ -109,7 +109,7 @@ PropertyGtkStore.prototype = {
     __proto__: PropertyStore.prototype,
 
     _init: function(initial_properties) {
-        PropertyStore.prototype._init.call(this);
+        PropertyStore.prototype._init.call(this, initial_properties);
     },
 
     set: function(name, value) {
@@ -139,6 +139,7 @@ DbusMenuItem.prototype = {
             this._propStore = new PropertyGtkStore(properties);
         else
             this._propStore = new PropertyStore(properties);
+        
         this._children_ids = children_ids;
     },
 
@@ -255,7 +256,9 @@ DBusClient.prototype = {
 
     _init: function(busName, busPath) {
         this._proxy = new BusClientProxy(Gio.DBus.session, busName, busPath, Lang.bind(this, this._clientReady));
-        this._items = { 0: new DbusMenuItem(this, 0, { 'children-display': GLib.Variant.new_string('submenu') }, []) };
+        let init_id = this._get_init_id();
+        this._items = {};
+        this._items[init_id] = new DbusMenuItem(this, init_id, { 'children-display': GLib.Variant.new_string('submenu') }, []);
 
         // will be set to true if a layout update is requested while one is already in progress
         // then the handler that completes the layout update will request another update
@@ -267,7 +270,11 @@ DBusClient.prototype = {
     },
 
     get_root: function() {
-        return this._items[0];
+        return this._items[this._get_init_id()];
+    },
+
+    _get_init_id: function() {
+        return 0;
     },
 
     _requestLayoutUpdate: function() {
@@ -316,7 +323,7 @@ DBusClient.prototype = {
     _gcItems: function() {
         let tag = new Date().getTime();
 
-        let toTraverse = [ 0 ];
+        let toTraverse = [ this._get_init_id() ];
         while (toTraverse.length > 0) {
             let item = this.get_item(toTraverse.shift());
             item._dbusClientGcTag = tag;
@@ -484,13 +491,16 @@ DBusClientGtk.prototype = {
     __proto__: DBusClient.prototype,
 
     _init: function(busName, busPath) {
-        //DBusClient.prototype._init.call(this);
+        //DBusClient.prototype._init.call(this, busName, );
         this._busName = busName;
         this._busPath = busPath;
         this.gtk_menubar_menus = null;
+
         this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
         //FIXME we need to translate the id to the appmenu way?
-        this._items = { "-1": new DbusMenuItem(this, "-1", { 'children-display': GLib.Variant.new_string('submenu') }, []) };
+        let init_id = this._get_init_id();
+        this._items = {};
+        this._items[init_id] = new DbusMenuItem(this, init_id, { 'children-display': GLib.Variant.new_string('submenu') }, []);
 
         // will be set to true if a layout update is requested while one is already in progress
         // then the handler that completes the layout update will request another update
@@ -501,8 +511,8 @@ DBusClientGtk.prototype = {
         this._propertiesRequestedFor = [ /* ids */ ];
     },
 
-    get_root: function() {
-        return this._items["-1"];
+    _get_init_id: function() {
+        return "02"; //FIXME need to be 00
     },
 
     _requestLayoutUpdate: function() {
@@ -535,33 +545,30 @@ DBusClientGtk.prototype = {
 
         //Now unpack the menu and create a fake root item?
         if((result) && (result[0])) {
-            this.gtk_menubar_menus = { "-1":[] };
-            let root_menu = this.gtk_menubar_menus["-1"];
+            let init_id = this._get_init_id();
+            this.gtk_menubar_menus = {};
+            this.gtk_menubar_menus[init_id] = [];
             //Main.notify("Newwwwwwwwwwwww " + result[0]);
             result[0].forEach(function([menu_pos, section_pos, section_items]) {
                 this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
-                //Main.notify("" + menu_pos + "" + section_pos);
-                if((menu_pos == 0))
-                    this.gtk_menubar_menus["-1"].push({":submenu": GLib.Variant.new("(uu)", [menu_pos, section_pos])});
             }, this);
             //Main.notify("Endddddddddddddddddd " + Object.keys(this.gtk_menubar_menus));
-            this._doLayoutUpdate("-1", { "children-display": "submenu" } );
+            this._doLayoutUpdate(init_id, { "children-display": GLib.Variant.new_string("submenu") } );
         }
 
-        //this._gcItems();
+        this._gcItems();
 
-        //if (this._flagLayoutUpdateRequired)
-        //    this._beginLayoutUpdate();
-        //else
-        //    this._flagLayoutUpdateInProgress = false;
+        if (this._flagLayoutUpdateRequired)
+            this._beginLayoutUpdate();
+        else
+            this._flagLayoutUpdateInProgress = false;
     },
 
     _doLayoutUpdate: function(id, properties) {
-        //Main.notify("Gtk Menu Is: " + menu + " " + section + " " + items);
+        //Main.notify("Gtk Menu Is: " + id);
         try {
         let item = this.gtk_menubar_menus[id];
         if(this.gtk_menubar_menus) {
-            //let properties = {}; //FIXME
             let children_ids = [];
             let menu_section, id_sub, new_pos;
             if(id in this.gtk_menubar_menus) {
@@ -570,30 +577,20 @@ DBusClientGtk.prototype = {
                     menu_section["type"] = GLib.Variant.new_string("standard");
                     if(":section" in menu_section) {
                         new_pos = menu_section[":section"].deep_unpack();
-                        //Main.notify("section " + new_pos);
                         id_sub = "" + new_pos[0] + new_pos[1];
                         children_ids.push(id_sub);
-                        //Main.notify("Gtk Menu id is: " + id_sub);
                         menu_section["children-display"] = GLib.Variant.new_string("section");
-                        //Main.notify(id_sub);
-                        if (!(id in this._items))
-                           this._doLayoutUpdate(id_sub, menu_section);
+                        this._doLayoutUpdate(id_sub, menu_section);
                     }
                     else if(":submenu" in menu_section) {
                         new_pos = menu_section[":submenu"].deep_unpack();
-                        //Main.notify("submenu " + new_pos);
                         id_sub = "" + new_pos[0] + new_pos[1];
                         children_ids.push(id_sub);
-                        //Main.notify("Gtk Menu id is: " + id_sub);
                         menu_section["children-display"] = GLib.Variant.new_string("submenu");
-                        //Main.notify(id_sub);
-                        //if (!(id in this._items))
                         this._doLayoutUpdate(id_sub, menu_section);
                     } else {
                         id_sub = "" + id + "" + pos;
                         children_ids.push(id_sub);
-                        //Main.notify("solo " + id_sub);
-                        if (!(id in this._items))
                         this._doLayoutUpdate(id_sub, menu_section);
                     }
                 }
@@ -625,6 +622,9 @@ DBusClientGtk.prototype = {
                         this._items[id].move_child(children_ids[i], i);
                     }
                 }
+
+                // remove any old children that weren't reused
+                old_children_ids.forEach(function(child_id) { this._items[id].remove_child(child_id); }, this);
             } else {
                 // we don't, so let's create us
                 this._items[id] = new DbusMenuItem(this, id, properties, children_ids);
@@ -721,7 +721,7 @@ const MenuItemFactory = {
 
     createItem: function(client, dbusItem) {
         // first, decide whether it's a submenu or not
-        if (dbusItem.property_get("children-display") == "submenu")
+        if ((dbusItem.property_get("children-display") == "submenu") || (dbusItem.property_get("children-display") == "section"))
             var shellItem = new PopupMenu.PopupSubMenuMenuItem("FIXME");
         else if (dbusItem.property_get("children-display") == "section")
             var shellItem = new PopupMenu.PopupMenuSection();

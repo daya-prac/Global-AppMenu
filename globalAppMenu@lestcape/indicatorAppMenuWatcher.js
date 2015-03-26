@@ -115,20 +115,20 @@ IndicatorAppMenuWatcher.prototype = {
             GLib.setenv('UBUNTU_MENUPROXY', "1", true);
             is_ready = false;
         }
-        if((!is_ready) && (this._is_cinnamon_session_start())) {
+        /*if((!is_ready) && (this._is_cinnamon_session_start())) {
             this._restart_nemo();
-        }
+        }*/
         //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY'));
     },
 
     _is_cinnamon_session_start: function() {
         let string_file = this._readFile(GLib.get_home_dir() + "/.xsession-errors");
-        return ((!string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
+        return ((string_file) || (string_file.indexOf("About to start Cinnamon") == string_file.lastIndexOf("About to start Cinnamon")));
     },
 
     _restart_nemo: function() {
-        this._execCommand("nemo -q");
-        this._execCommand("nemo -n");//FIXME
+        //this._execCommand("nemo -q");
+        //this._execCommand("nemo -n");//FIXME
         log("restart nemoooooooooooooo");
     },
 

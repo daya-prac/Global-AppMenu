@@ -313,6 +313,7 @@ IndicatorAppMenuWatcher.prototype = {
                         }
                     });
                 } else {
+                    global.log("creating menu on "+[sender, path]);
                     callback(xid, new DBusMenu.Client(sender, path, is_gtk));
                 }
             } else {
@@ -389,6 +390,7 @@ IndicatorAppMenuWatcher.prototype = {
                 //get_gtk_menubar_object_path(); get_gtk_app_menu_object_path();
                 let menu_object_path = wind.get_gtk_menubar_object_path();
                 let unique_bus_name = wind.get_gtk_unique_bus_name();
+                //Main.notify("" + wind.title + " " + appT.get_name() + " " + menu_object_path + " " + unique_bus_name)
                 if((menu_object_path)&&(unique_bus_name)) {
                     menuPath = menu_object_path;
                     sender_dbus = unique_bus_name;
@@ -399,7 +401,7 @@ IndicatorAppMenuWatcher.prototype = {
         if(!menuPath) menuPath = "";
         if(!sender_dbus) sender_dbus = "";
 
-        if (xid in this._registered_windows) {
+        if (xid in this._registered_windows) { //"org/gtk/Application/anonymous/menus/menubar"
             /*if ((menuPath != "") && (this._registered_windows[xid].menuObjectPath != "") && (this._registered_windows[xid].menuObjectPath != menuPath))
                 Main.notify("Wrong menuPath " + this._registered_windows[xid].window + " " + wind.title);
             if ((sender_dbus != "") && (this._registered_windows[xid].sender != "") && (this._registered_windows[xid].sender != sender_dbus))

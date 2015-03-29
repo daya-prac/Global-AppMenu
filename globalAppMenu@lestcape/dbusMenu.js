@@ -59,8 +59,7 @@ const DefaultValues = {
     'label'      : GLib.Variant.new_string(""),
     'type'       : GLib.Variant.new_string("standard"),
     'action'     : GLib.Variant.new_string(""),
-    'accel'      : GLib.Variant.new_string(""),
-    'param-type' : GLib.Variant.new_string("")
+    'accel'      : GLib.Variant.new_string("")
     // elements not in here must return null
 };
 
@@ -543,7 +542,7 @@ DBusClientGtk.prototype = {
             for(let action_id in properties_hash) {
                 if((isNotCreate)&&(!(action_id in this.actions_ids))) {
                     isNotCreate = true;
-                    this._create_labels_ids();
+                    this._create_actions_ids();
                 }
                 let id = this.actions_ids[action_id];
                 if (!(id in this._items))
@@ -559,7 +558,7 @@ DBusClientGtk.prototype = {
                 if(properties[2])
                     this._items[id].property_set("parameters", properties[2]);
             }
-          } catch(e) {Main.notify("" + e.message);}
+          } catch(e) {Main.notify("AAA" + e.message);}
         }
     },
 
@@ -571,25 +570,9 @@ DBusClientGtk.prototype = {
                 this.actions_ids[action_id.replace("unity.", "")] = id;
             }
         }
-        //Main.notify("val" + Object.keys(this.actions_ids));
+        //Main.notify("val " + Object.keys(this.actions_ids));
     },
-/*
-    _convert_property: function(v) {
-        if (isinstance(v, basestring))
-            return unicode(v);
-        if isinstance(v, dbus.Struct)
-            return tuple(convert(val) for val in v);
-        if isinstance(v, list)
-            return [convert(val) for val in v];
-        if isinstance(v, dict)
-            return {convert(k):convert(val) for k, val in v.iteritems()};
-        if isinstance(v, dbus.Boolean)
-            return bool(v);
-        if isinstance(v, (dbus.UInt32, dbus.UInt16))
-            return int(v);
-        return v;
-    },
-*/
+
     _requestLayoutUpdate: function() {
         if (this._flagLayoutUpdateInProgress)
             this._flagLayoutUpdateRequired = true;
@@ -643,11 +626,10 @@ DBusClientGtk.prototype = {
     _doLayoutUpdate: function(id, properties) {
         //Main.notify("Gtk Menu Is: " + id);
         try {
-        let item = this.gtk_menubar_menus[id];
-        if(this.gtk_menubar_menus) {
             let children_ids = [];
             let menu_section, id_sub, new_pos;
             if(id in this.gtk_menubar_menus) {
+                let item = this.gtk_menubar_menus[id];
                 for(let pos in item) {
                     menu_section = item[pos];
                     menu_section["type"] = GLib.Variant.new_string("standard");
@@ -706,7 +688,6 @@ DBusClientGtk.prototype = {
                 this._items[id] = new DbusMenuItem(this, id, properties, children_ids);
                 //this._requestProperties(id);
             }
-        }
         } catch (e) {Main.notify("Errorrrrr " + e.message);}
         return id;
     },
@@ -715,15 +696,12 @@ DBusClientGtk.prototype = {
     },
 
     send_event: function(id, event, params, timestamp) {//FIXME no match signal id
-        //params = [];
-        //let plataform = {};
-        params = null;
-        let plataform = null;
-        //Main.notify("" + id)
         let action_id = this._items[id].property_get("action");
         if(action_id) {
+            let plataform = {};
+            params = this._items[id].property_get_variant("parameters");
+            if(!params) params = GLib.Variant.new("av", []);
             this._proxy_action.ActivateRemote(action_id.replace("unity.", ""), params, plataform, function(result, error) { /* we don't care */ })
-            //this._proxy_menu.ActivateRemote(id, event, params, timestamp, function(result, error) { /* we don't care */ });
         }
     },
 
@@ -758,9 +736,9 @@ DBusClientGtk.prototype = {
         this._requestLayoutUpdate();
         this._requestActionsUpdate();
 
-        // listen for updated layouts and properties
-        //this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
-        //this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
+        // listen for updated layouts and actions
+        this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
+        this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
     }
 };
 Signals.addSignalMethods(DBusClientGtk.prototype);
@@ -883,6 +861,7 @@ const MenuItemFactory = {
             'child-removed':      Lang.bind(shellItem, MenuItemFactory._onChildRemoved),
             'child-moved':        Lang.bind(shellItem, MenuItemFactory._onChildMoved)
         }, shellItem);
+
         Util.connectAndRemoveOnDestroy(shellItem, {
             'activate':  Lang.bind(shellItem, MenuItemFactory._onActivate)
         });

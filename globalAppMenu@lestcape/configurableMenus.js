@@ -31,7 +31,8 @@ PopupMenuSectionMenuItem.prototype = {
     __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
 
     _init: function() {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+        PopupMenu.PopupBaseMenuItem.prototype._init.call(this, {reactive: false,
+            activate: false, hover: false, sensitive: false, focusOnHover: false});
         this.actor.add_style_class_name('popup-submenu-menu-item');
         this.actor.add_style_class_name('popup-section-menu-item');
         this.menu = new PopupMenu.PopupSubMenu(this.actor);
@@ -42,7 +43,7 @@ PopupMenuSectionMenuItem.prototype = {
         return PopupMenu.PopupBaseMenuItem.prototype._onKeyPressEvent.call(this, actor, event);
     },
 
-    activate: function(event) { },
+    activate: function(event) {},
     _onButtonReleaseEvent: function(actor) {}
 };
 

@@ -47,10 +47,10 @@ const MandatedTypes = {
     'toggle-type'       : GLib.VariantType.new("s"),
     'toggle-state'      : GLib.VariantType.new("i"),
     'action'            : GLib.VariantType.new("s"),
-    'target'            : GLib.VariantType.new("v"),
+    //'target'            : GLib.VariantType.new("v"),
     'accel'             : GLib.VariantType.new("s"),
-    'param-type'        : GLib.VariantType.new("g"),
-    'parameters'        : GLib.VariantType.new("av")
+    //'param-type'        : GLib.VariantType.new("g"),
+    //'parameters'        : GLib.VariantType.new("av")
 };
 
 const DefaultValues = {
@@ -88,7 +88,7 @@ PropertyStore.prototype = {
     },
 
     set: function(name, value) {
-        if (name in MandatedTypes && value && !value.is_of_type(MandatedTypes[name]))
+        if (name in MandatedTypes && value && value.is_of_type && !value.is_of_type(MandatedTypes[name]))
             global.logWarning("Cannot set property "+name+": type mismatch!");
         else if (value)
             this._props[name] = value;
@@ -103,30 +103,34 @@ PropertyStore.prototype = {
             return DefaultValues[name];
         else
             return null;
-    }
-};
-
-/**
- * Saves menu property values and handles type checking and defaults
- */
-function PropertyGtkStore(initial_properties) {
-    this._init(initial_properties);
-}
-
-PropertyGtkStore.prototype = {
-    __proto__: PropertyStore.prototype,
-
-    _init: function(initial_properties) {
-        PropertyStore.prototype._init.call(this, initial_properties);
     },
 
-    set: function(name, value) {
-        /*if (name in MandatedTypes && value && !value.is_of_type(MandatedTypes[name]))
-            global.logWarning("Cannot set property "+name+": type mismatch!");
-        else*/ if (value)
-            this._props[name] = value;
-        else
-            delete this._props[name];
+    compare_new: function(name, new_value) {
+        if (name in MandatedTypes && new_value && new_value.is_of_type && !new_value.is_of_type(MandatedTypes[name]))
+           return false;
+
+        let old_value = this.get(name);
+        if (new_value && !old_value || old_value && !new_value)
+            return true;
+
+        let is_old_container = old_value.is_container && old_value.is_container();
+        let is_new_container = new_value.is_container && new_value.is_container();
+
+        if (is_old_container != is_new_container)
+            return true;
+
+        if ((!is_old_container) && (!is_new_container))
+            return (old_value.compare(new_value) != 0);
+
+        let array_old = old_value.deep_unpack();
+        let array_new = new_value.deep_unpack();
+        if(array_old.length != array_new.length)
+            return true;
+        for(let child in array_old) {
+            if(!(child in array_new) || (array_old[child] != array_new[child]))
+                return true;
+        }
+        return false;
     }
 };
 
@@ -143,11 +147,7 @@ DbusMenuItem.prototype = {
     _init: function(client, id, properties, children_ids) {
         this._client = client;
         this._id = id;
-        if (client instanceof DBusClientGtk)
-            this._propStore = new PropertyGtkStore(properties);
-        else
-            this._propStore = new PropertyStore(properties);
-        
+        this._propStore = new PropertyStore(properties);
         this._children_ids = children_ids;
     },
 
@@ -171,14 +171,11 @@ DbusMenuItem.prototype = {
     },
 
     property_set: function(prop, value) {
-        let old_value = this._propStore.get(prop);
-
-        this._propStore.set(prop, value);
-
-        let new_value = this._propStore.get(prop);
-
-        if (new_value && !old_value || old_value && !new_value || old_value.compare(new_value) != 0)
+        //if (new_value && !old_value || old_value && !new_value || old_value.compare(new_value) != 0)
+        if (this._propStore.compare_new(prop, value)) {
+            this._propStore.set(prop, value);
             this.emit('property-changed', prop, this.property_get_variant(prop));
+        }
     },
 
     get_children_ids: function() {
@@ -505,6 +502,8 @@ DBusClientGtk.prototype = {
         this.gtk_menubar_menus = null;
         this.labels_ids = {};
 
+        log("create " + this._busPath + " " + this._busName);
+
         this._proxy_menu = new BusGtkClientProxy(Gio.DBus.session, this._busName, this._busPath, Lang.bind(this, this._clientReady));
         //FIXME we need to translate the id to the appmenu way?
         let init_id = this._get_init_id();
@@ -513,6 +512,8 @@ DBusClientGtk.prototype = {
 
         // will be set to true if a layout update is requested while one is already in progress
         // then the handler that completes the layout update will request another update
+        this._idLayoutUpdate = 0;
+        this._idActionsUpdate = 0;
         this._flagLayoutUpdateRequired = false;
         this._flagLayoutUpdateInProgress = false;
 
@@ -525,6 +526,8 @@ DBusClientGtk.prototype = {
     },
 
     _requestActionsUpdate: function() {
+        if(this._idActionsUpdate != 0)
+            this._idActionsUpdate = 0;
         let action_ids = [];
         this._proxy_action.DescribeAllRemote(Lang.bind(this, this._endActionsUpdate));
     },
@@ -558,6 +561,7 @@ DBusClientGtk.prototype = {
                 if(properties[2])
                     this._items[id].property_set("parameters", properties[2]);
             }
+            log("action update " + this._busPath + " " + this._busName);
           } catch(e) {Main.notify("AAA" + e.message);}
         }
     },
@@ -574,6 +578,8 @@ DBusClientGtk.prototype = {
     },
 
     _requestLayoutUpdate: function() {
+        if(this._idLayoutUpdate != 0)
+            this._idLayoutUpdate = 0;
         if (this._flagLayoutUpdateInProgress)
             this._flagLayoutUpdateRequired = true;
         else
@@ -585,14 +591,14 @@ DBusClientGtk.prototype = {
     _beginLayoutUpdate: function() {
         // we only read the type property, because if the type changes after reading all properties,
         // the view would have to replace the item completely which we try to avoid
-        //this._proxy_menu.GetLayoutRemote(0, -1, [ 'type', 'children-display' ], Lang.bind(this, this._endLayoutUpdate));
+
+        this._flagLayoutUpdateInProgress = true;
+        this._flagLayoutUpdateRequired = false;
+
         let init_menu = [];
         for (let x = 0; x < 1024; x++) { init_menu.push(x); }
 
         this._proxy_menu.StartRemote(init_menu, Lang.bind(this, this._endLayoutUpdate));
-
-        this._flagLayoutUpdateRequired = false;
-        this._flagLayoutUpdateInProgress = true;
     },
 
     _endLayoutUpdate: function(result, error) {
@@ -612,6 +618,7 @@ DBusClientGtk.prototype = {
             }, this);
             //Main.notify("Endddddddddddddddddd " + Object.keys(this.gtk_menubar_menus));
             this._doLayoutUpdate(init_id, { "children-display": GLib.Variant.new_string("submenu") } );
+            log("update layout " + this._busPath + " " + this._busName)
         }
 
         this._gcItems();
@@ -717,7 +724,14 @@ DBusClientGtk.prototype = {
     },
 
     _onLayoutUpdated: function() {
-        this._requestLayoutUpdate();
+        if(this._idLayoutUpdate == 0)
+            this._idLayoutUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, this._requestLayoutUpdate));
+        //log("ES" + this._idLayoutUpdate)
+    },
+
+    _onActionsUpdated: function() {
+        if(this._idActionsUpdate == 0)
+            this._idActionsUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, this._requestActionsUpdate));
     },
 
     _clientReady: function(result, error) {
@@ -737,11 +751,13 @@ DBusClientGtk.prototype = {
         this._requestActionsUpdate();
 
         // listen for updated layouts and actions
-        this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
-        this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
+        this._idLayoutUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, function() {
+            this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
+            //this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
+        }));
     }
 };
-Signals.addSignalMethods(DBusClientGtk.prototype);
+//Signals.addSignalMethods(DBusClientGtk.prototype);
 
 //////////////////////////////////////////////////////////////////////////
 // PART TWO: "View" frontend implementation.
@@ -901,14 +917,14 @@ const MenuItemFactory = {
         else if (prop == "type" || prop == "children-display")
             MenuItemFactory._replaceSelf.call(this);
         //else
-        //    Util.Logger.debug("Unhandled property change: "+prop);
+        //    global.logWarning("Unhandled property change: "+prop);
     },
 
     _onChildAdded: function(dbusItem, child, position) {
         if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
             this.menu.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child), position);
         } else {
-            Util.Logger.warn("Tried to add a child to non-submenu item. Better recreate it as whole");
+            global.logWarning("Tried to add a child to non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
         }
     },
@@ -921,7 +937,7 @@ const MenuItemFactory = {
                     item.destroy();
             });
         } else {
-            Util.Logger.warn("Tried to remove a child from non-submenu item. Better recreate it as whole");
+            global.logWarning("Tried to remove a child from non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
         }
     },
@@ -930,7 +946,7 @@ const MenuItemFactory = {
         if (this instanceof PopupMenu.PopupSubMenuMenuItem) {
             MenuUtils.moveItemInMenu(this.menu, child, newpos);
         } else {
-            Util.Logger.warn("Tried to move a child in non-submenu item. Better recreate it as whole");
+            global.logWarning("Tried to move a child in non-submenu item. Better recreate it as whole");
             MenuItemFactory._replaceSelf.call(this);
         }
     },
@@ -986,7 +1002,7 @@ const MenuItemFactory = {
         // first, we need to find our old position
         let pos = -1;
         if(this._parent) {
-            let family = this._parent._getMenuItems();
+            let family = this._parent.menu._getMenuItems();
             for (let i = 0; i < family.length; ++i) {
                 if (family[i] === this)
                     pos = i;
@@ -997,7 +1013,7 @@ const MenuItemFactory = {
             //throw new Error("DBusMenu: can't replace non existing menu item");
         } else {
             // add our new self while we're still alive
-            this._parent.addMenuItem(newSelf, pos);
+            this._parent.menu.addMenuItem(newSelf, pos);
             // now destroy our old self
             this.destroy();
         }

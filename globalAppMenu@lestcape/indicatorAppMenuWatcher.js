@@ -70,6 +70,13 @@ function IndicatorAppMenuWatcher(launcher, mode) {
 IndicatorAppMenuWatcher.prototype = {
 
     _init: function(launcher, mode) {
+        this._registered_windows = { };
+        this._nameWatcher = { };
+
+        this.mode = mode;
+        this.launcher = null;
+        this.set_launcher(launcher);
+
         this._init_enviroment();
 
         this._dbusImpl = Gio.DBusExportedObject.wrapJSObject(Util.DBusAppMenu, this);
@@ -79,12 +86,8 @@ IndicatorAppMenuWatcher.prototype = {
                                   Gio.BusNameOwnerFlags.NONE,
                                   Lang.bind(this, this._acquiredName),
                                   Lang.bind(this, this._lostName));
-        this._registered_windows = { };
-        this._nameWatcher = { };
+  
 
-        this.mode = mode;
-        this.launcher = null;
-        this.set_launcher(launcher);
 
         this.tracker = Cinnamon.WindowTracker.get_default();
 
@@ -304,17 +307,25 @@ IndicatorAppMenuWatcher.prototype = {
             var is_gtk = this._registered_windows[xid].isGtk;
             if((sender != "")&&(path != "")) {
                 if(!is_gtk) {
-                    this._validateMenu(sender, path, function(r, name, path) {
+                    this._validateMenu(sender, path, Lang.bind(this, function(r, name, path) {
                         if (r) {
-                            global.log("creating menu on "+[name, path]);
-                            callback(xid, new DBusMenu.Client(name, path, is_gtk));
+                            if(!this._registered_windows[xid].appMenu) {
+                                global.log("creating menu on "+[name, path]);
+                                callback(xid, new DBusMenu.Client(name, path, is_gtk));
+                            } else {
+                                callback(xid, null);
+                            }
                         } else {
                             callback(xid, null);
                         }
-                    });
+                    }));
                 } else {
-                    global.log("creating menu on "+[sender, path]);
-                    callback(xid, new DBusMenu.Client(sender, path, is_gtk));
+                    if(!this._registered_windows[xid].appMenu) {
+                        global.log("creating menu on "+[sender, path]);
+                        callback(xid, new DBusMenu.Client(sender, path, is_gtk));
+                    } else {
+                        callback(xid, null);
+                    }
                 }
             } else {
                 callback(xid, null);

@@ -110,25 +110,6 @@ MyApplet.prototype = {
       }catch(e){Main.notify("Errors", e.message);}
     },
 
-    _onButtonPressEvent: function (actor, event) {
-        if (event.get_button() == 1) {
-            if (!this._draggable.inhibit) {
-                return false;
-            } else {
-                if (this._applet_context_menu.isOpen) {
-                    this._applet_context_menu.toggle();
-                }
-                this.on_applet_clicked(event);
-            }
-        }
-        if (event.get_button()==3){            
-            if (this._applet_context_menu._getMenuItems().length > 0) {
-                this._applet_context_menu.toggle();			
-            }
-        }
-        return true;
-    },
-
     _on_menu_dropped: function(fact, menu) {
        if(menu)
           menu.destroy();

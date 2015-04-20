@@ -1630,7 +1630,6 @@ ConfigurableMenuApplet.prototype = {
       this.actor.vertical = false;
       this.actor.hide();
       this._launcher.actor.add(this.actor);
-      this._launcher.actor.set_reactive(false);
       this._launcher.actor.set_track_hover(false);
       this.menu = new ConfigurableMenu(this._launcher, 0.0, this._orientation);
       let section = new PopupMenu.PopupMenuSection();
@@ -1639,6 +1638,7 @@ ConfigurableMenuApplet.prototype = {
       this._menuManager.addMenu(this.menu);
       this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
       this.default_displayed = true;
+      this.actor.show();
    },
 
    open: function() {
@@ -1739,6 +1739,7 @@ ConfigurableMenuApplet.prototype = {
          if(!this.menu.isOpen)
             this.menu.openClean();
          this.menu.repositionActor(actor);
+         return true;
    },
 
    destroy: function() {

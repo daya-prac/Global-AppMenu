@@ -1913,13 +1913,23 @@ MenuFactory.prototype = {
         }
     },
 
-    _setOrnamentPolyfill: function(ornamentType) {
+    _setOrnamentPolyfill: function(ornamentType, state) {
         if (ornamentType == OrnamentType.CHECK) {
-            this._ornament.set_text('\u2713');
-            this.actor.add_accessible_state(Atk.StateType.CHECKED);
+            if(state) {
+                this._ornament.set_text('\u2714');
+                this.actor.add_accessible_state(Atk.StateType.CHECKED);
+            } else {
+                this._ornament.set_text('\u2752');
+                this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+            }
         } else if (ornamentType == OrnamentType.DOT) {
-            this._ornament.set_text('\u2022');
-            this.actor.add_accessible_state(Atk.StateType.CHECKED);
+            if(state) {
+                this._ornament.set_text('\u2022');
+                this.actor.add_accessible_state(Atk.StateType.CHECKED);
+            } else {
+                this._ornament.set_text('\u274D');
+                this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+            }
         } else {
             this._ornament.set_text('');
             this.actor.remove_accessible_state(Atk.StateType.CHECKED);
@@ -1971,6 +1981,14 @@ MenuFactory.prototype = {
         shellItem._dbusItem = dbusItem;
 
         if (shellItem instanceof this.MenuItemClass) {
+            if (!shellItem.setAccel) {
+                shellItem._accel = new St.Label();
+                if (shellItem.addActor) { //GS 3.8
+                    shellItem.addActor(shellItem._accel);
+                } else { //GS >= 3.10
+                    shellItem.actor.add_actor(shellItem._accel);
+                }
+            }
             // GS3.8: emulate the ornament stuff.
             // this is similar to how the setShowDot function works
             if (!shellItem.setOrnament) {
@@ -1989,9 +2007,11 @@ MenuFactory.prototype = {
             }
         }
 
+
         // initialize our state
         this._updateLabel(shellItem);
         this._updateOrnament(shellItem);
+        this._updateAccel(shellItem);
         this._updateImage(shellItem);
         this._updateVisible(shellItem);
         this._updateSensitive(shellItem);
@@ -2063,6 +2083,8 @@ MenuFactory.prototype = {
     _onPropertyChanged: function(dbusItem, prop, value, shellItem) {
         if (prop == "toggle-type" || prop == "toggle-state")
             this._updateOrnament(shellItem);
+        else if (prop == "accel")
+            this._updateAccel(shellItem);
         else if (prop == "label")
             this._updateLabel(shellItem);
         else if (prop == "enabled")
@@ -2132,6 +2154,15 @@ MenuFactory.prototype = {
             shellItem.setOrnament(OrnamentType.DOT, shellItem._dbusItem.get_toggle_state());
         } else {
             shellItem.setOrnament(OrnamentType.NONE);
+        }
+    },
+
+    _updateAccel: function(shellItem) {
+        if (shellItem._accel) {
+            let accel = shellItem._dbusItem.get_accel();
+            if(accel) {
+                shellItem._accel.set_text(accel);
+            }
         }
     },
 

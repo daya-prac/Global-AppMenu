@@ -20,6 +20,7 @@ const Lang = imports.lang;
 const Signals = imports.signals;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
+const Gtk = imports.gi.Gtk;
 const GdkPixbuf = imports.gi.GdkPixbuf;
 const Main = imports.ui.main;
 
@@ -38,6 +39,7 @@ const MandatedTypes = {
     'type'              : GLib.VariantType.new("s"),
     'children-display'  : GLib.VariantType.new("s"),
     'icon-name'         : GLib.VariantType.new("s"),
+    'gtk-icon-name'     : GLib.VariantType.new("s"),
     'icon-data'         : GLib.VariantType.new("ay"),
     'toggle-type'       : GLib.VariantType.new("s"),
     'toggle-state'      : GLib.VariantType.new("i"),
@@ -62,6 +64,8 @@ const EventTypes = {
     'clicked'   : "clicked"
     // elements not in here must return null
 };
+
+const IconTheme = Gtk.IconTheme.get_default();
 
 //////////////////////////////////////////////////////////////////////////
 // PART ONE: "ViewModel" backend implementation.
@@ -209,11 +213,24 @@ DbusMenuItem.prototype = {
     },
 
     get_gdk_icon: function() {
-        let iconData = this._propStore.get_variant("icon-data");
-        if (iconData) {
-            let data = iconData.get_data_as_bytes()
-            let stream = Gio.MemoryInputStream.new_from_bytes(data);
-            return GdkPixbuf.Pixbuf.new_from_stream(stream, null);
+        try {
+            let iconData = this._propStore.get_variant("icon-data");
+            if (iconData) {
+                let data = iconData.get_data_as_bytes()
+                let stream = Gio.MemoryInputStream.new_from_bytes(data);
+                return GdkPixbuf.Pixbuf.new_from_stream(stream, null);
+            } else {
+                let icon_name = this._propStore.get_string("gtk-icon-name");
+                if (!icon_name)
+                    return null;
+                if(!IconTheme.has_icon(icon_name))
+                    return null;
+                let icon = IconTheme.load_icon(icon_name, 25,
+                           Gtk.IconLookupFlags.GENERIC_FALLBACK);
+                return icon;
+            }
+        } catch(e) {
+            global.log("Error loading icon.");
         }
         return null;
     },
@@ -232,7 +249,12 @@ DbusMenuItem.prototype = {
     },
 
     get_accel: function() {
-        return this._propStore.get_string('accel');
+        let accel_name = this._propStore.get_string('accel');
+        if (accel_name) {
+            [key, mods] = Gtk.accelerator_parse(accel_name);
+            return Gtk.accelerator_get_label(key, mods);
+        }
+        return null;
     },
 
     get_children: function() {
@@ -682,18 +704,31 @@ DBusClientGtk.prototype = {
                 else
                     this._items[id].set_variant_property("param-type", GLib.Variant.new("g", ""));
 
-                if(properties[2])
-                    this._items[id].set_variant_property("action-parameters", properties[2]);
+                if((properties[2])&&(properties[2].length > 0)) {
+                    this._items[id].set_variant_property("toggle-type", GLib.Variant.new_string('checkmark'));
+                    let value = properties[2][0].deep_unpack();
+                    this._items[id].set_variant_property("toggle-state", GLib.Variant.new_int32(value ? 1 : 0));
+                } else if (this._items[id].get_toggle_state()) {
+                    this._items[id].set_variant_property("toggle-state", GLib.Variant.new_int32(0));
+                }
             }
         }
     },
 
     _create_actions_ids: function() {
         this.actions_ids = {};//FIXME add and remove better?
+        let theme = Gtk.IconTheme.get_default();
         for(let id in this._items) {
             let action_id = this._items[id].get_action();
             if(action_id) {
                 this.actions_ids[action_id] = id;
+                try {
+                    if(IconTheme.has_icon(action_id.toLowerCase())) {
+                        this._items[id].set_variant_property("gtk-icon-name", GLib.Variant.new_string(action_id.toLowerCase()));
+                    }
+                } catch(e) {
+                   global.logWarning("While reading actions ids: " + error);
+                }
             }
         }
     },
@@ -725,7 +760,7 @@ DBusClientGtk.prototype = {
 
     _endLayoutUpdate: function(result, error) {
         if (error) {
-            global.logWarning("While reading menu layout: "+error);
+            global.logWarning("While reading menu layout: " + error);
             return;
         }
 
@@ -829,7 +864,7 @@ DBusClientGtk.prototype = {
         if((action_id)&&(this._proxy_action)) {
             let plataform = {};
             if(!params)
-                params = this._items[id].get_variant_property("action-parameters");
+                params = this._items[id].get_variant_property("param-type");
             if(!params) 
                 params = GLib.Variant.new("av", []);
             this._proxy_action.ActivateRemote(action_id, params, plataform,

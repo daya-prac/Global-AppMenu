@@ -1,6 +1,6 @@
 Cinnamon Applet: Global Application Menu Version: v0.0-Beta
 
-Last version release date: 01 march 2015
+Last update: 20 april 2015
 
 ***
 Special thanks to:
@@ -18,8 +18,10 @@ It's based on the Gnome Shell extension made by rgcjonas: https://github.com/rgc
 
 Known issues:
 --------------
-* The applet could takes ages to load can freeze cinnamon forever. This is probably caused by the insane amount of embedded PNG icons. Try at your own risk.
-* There are several unsupported application that can not be integrate into the applet (gedit, nemo,...), also Firefox drop the menu after some time.
+* The applet could takes ages to load and can freeze cinnamon forever. This is probably caused by the insane amount of embedded PNG icons. Try at your own risk.
+* There are some unsupported application that can not be integrate into the applet, like evince, also Firefox drop the menu after some time.
+
+https://bugs.launchpad.net/plasma-widget-menubar/+bug/878165
 
 Change log
 --------------
@@ -54,9 +56,19 @@ https://github.com/lestcape/Global-AppMenu/pulls
 
 Installation Instructions:
 --------------
-1. Download this applet from their website : https://github.com/lestcape/Global-AppMenu
-2. Unzip the downloaded file and copy the folder globalAppMenu@lestcape at ~/.local/share/cinnamon/applets/
-3. Enable the applet in Cinnamon Settings and use it.
+1. Install the unity-gtk-module package.
+2. Restart your computer.
+3. Download this applet from their website : https://github.com/lestcape/Global-AppMenu
+4. Unzip the downloaded file and copy the folder globalAppMenu@lestcape at ~/.local/share/cinnamon/applets/
+5. Enable the applet in Cinnamon Settings.
+6. Logout and login again.
+
+To remove, disable the applet, reset the gsettings values:
+gsettings reset org.cinnamon.settings-daemon.plugins.xsettings overrides
+gsettings reset org.cinnamon.settings-daemon.plugins.xsettings enabled-gtk-modules
+
+If you don't use unity desktop, remove the package, unity-gtk-module.
+Restart your computer.
 
 ==============
 Thank you very much for using this product.

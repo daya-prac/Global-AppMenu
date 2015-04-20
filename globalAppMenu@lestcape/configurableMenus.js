@@ -14,37 +14,27 @@
 // along with this program; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
+const Cinnamon = imports.gi.Cinnamon;
+const Applet = imports.ui.applet;
 const PopupMenu = imports.ui.popupMenu;
 const BoxPointer = imports.ui.boxpointer;
 const Clutter = imports.gi.Clutter;
 const Gtk = imports.gi.Gtk;
 const Main = imports.ui.main;
 const St = imports.gi.St;
+const Atk = imports.gi.Atk;
 const Tweener = imports.ui.tweener;
 const Lang = imports.lang;
+const Params = imports.misc.params;
+const Signals = imports.signals;
 
-function PopupMenuSectionMenuItem() {
-    this._init.apply(this, arguments);
-}
+const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
+const Utility = AppletPath.utility;
 
-PopupMenuSectionMenuItem.prototype = {
-    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
-
-    _init: function() {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this, {reactive: false,
-            activate: false, hover: false, sensitive: false, focusOnHover: false});
-        this.actor.add_style_class_name('popup-submenu-menu-item');
-        this.actor.add_style_class_name('popup-section-menu-item');
-        this.menu = new PopupMenu.PopupSubMenu(this.actor);
-        this.menu.actor.show();
-    },
-
-    _onKeyPressEvent: function(actor, event) {
-        return PopupMenu.PopupBaseMenuItem.prototype._onKeyPressEvent.call(this, actor, event);
-    },
-
-    activate: function(event) {},
-    _onButtonReleaseEvent: function(actor) {}
+const OrnamentType = PopupMenu.Ornament ? PopupMenu.Ornament : {
+    NONE: 0,
+    CHECK: 1,
+    DOT: 2
 };
 
 function ConfigurablePointer(arrowSide, binProperties) {
@@ -148,8 +138,8 @@ ConfigurablePointer.prototype = {
                   break;
                }
             }
-            maxHeightBottom = 0;
-            maxHeightTop = 0;
+            let maxHeightBottom = 0;
+            let maxHeightTop = 0;
             let panels = Main.panelManager.getPanelsInMonitor(i);
             for(let j in panels) {
                if(panels[j].bottomPosition)
@@ -228,7 +218,7 @@ ConfigurablePointer.prototype = {
 
    _getTopMenu: function(actor) {
       while(actor) {
-         if(actor._delegate && actor._delegate instanceof ConfigurableMenu)
+         if((actor._delegate) && (actor._delegate instanceof PopupMenu.PopupMenu))
             return actor._delegate;
          actor = actor.get_parent();
       }
@@ -292,15 +282,15 @@ try {
          let [maxHeightBottom, maxHeightTop] = this._maxPanelSize();
          let maxPHV = Math.max(maxHeightBottom, maxHeightTop);
          resY = Math.max(resY, monitor.y + maxPHV);
-         let m = this._getTopMenu(sourceActor);
+         let topMenu = this._getTopMenu(sourceActor);
          if(Main.panelManager) {
-            if(((maxHeightBottom == 0)||(maxHeightTop==0))&&(m)&&(m._arrowSide == St.Side.TOP)) {
+            if(((maxHeightBottom == 0)||(maxHeightTop==0))&&(topMenu)&&(topMenu._arrowSide == St.Side.TOP)) {
                resY = Math.min(resY, monitor.y + monitor.height - (natHeight));
             } else {
                resY = Math.min(resY, monitor.y + monitor.height - (maxPHV + natHeight));
             }
          } else {
-            if((!Main.panel2)&&(m)&&(m._arrowSide == St.Side.TOP)) {
+            if((!Main.panel2)&&(topMenu)&&(topMenu._arrowSide == St.Side.TOP)) {
                resY = Math.min(resY, monitor.y + monitor.height - (natHeight));
             } else {
                resY = Math.min(resY, monitor.y + monitor.height - (maxPHV + natHeight));
@@ -565,28 +555,36 @@ try {
    }
 };
 
-function ConfigurableMenu(launcher, orientation, subMenu) {
-   this._init(launcher, orientation, subMenu);
+function ConfigurableMenu(launcher, arrowAlignment, orientation, subMenu) {
+   this._init(launcher, arrowAlignment, orientation, subMenu);
 }
 
 ConfigurableMenu.prototype = {
-     __proto__: PopupMenu.PopupMenu.prototype,
+    //__proto__: PopupMenu.PopupMenuBase.prototype,
+    __proto__: PopupMenu.PopupMenu.prototype, // compatibility reasons
 
-   _init: function(launcher, orientation, subMenu) {
-      PopupMenu.PopupMenuBase.prototype._init.call (this, launcher.actor, 'popup-menu-content');
+   _init: function(launcher, arrowAlignment, orientation, subMenu) {
+      PopupMenu.PopupMenuBase.prototype._init.call (this, (launcher ? launcher.actor: null), 'popup-menu-content');
       try {
-         this._arrowAlignment = 0.0;
+         this._arrowAlignment = arrowAlignment;
          this._arrowSide = orientation;
          this.subMenu = subMenu;
          this.effectType = "none";
          this.effectTime = 0.4;
+         this._automatic_open_control = true;
+         this._paint_id = 0;
+         this._paint_count = 0;
+         this.old_parent = null;
+
+         this.launcher = null;
+         this.orientation_id = 0;
+         this.set_launcher(launcher);
 
          this._boxPointer = new ConfigurablePointer(orientation,
                                                     { x_fill: true,
                                                       y_fill: true,
                                                       x_align: St.Align.START });
          this.actor = this._boxPointer.actor;
-         Main.uiGroup.add_actor(this.actor);
 
          this.actor._delegate = this;
          this.actor.style_class = 'popup-menu-boxpointer';
@@ -608,9 +606,62 @@ ConfigurableMenu.prototype = {
       }
    },
 
-   on_paint: function(actor) {
-      if(Main.popup_rendering)
-         Main.popup_rendering = false;
+   set_launcher: function(launcher) {
+      if(this.launcher != launcher) {
+         if(this.orientation_id > 0) {
+            if (this.launcher.actor instanceof Applet.Applet)
+               this.launcher.disconnect(this.orientation_id);
+            else if (this.launcher._applet)
+               this.launcher._applet.disconnect(this.orientation_id);
+            this.orientation_id = 0;
+         }
+         this.launcher = launcher;
+         if(this.launcher) {
+            this.sourceActor = this.launcher.actor;
+            if (this.launcher.actor instanceof Applet.Applet)
+               this.orientation_id = this.launcher.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+            else if (this.launcher._applet)
+               this.orientation_id = this.launcher._applet.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+         }
+      }
+   },
+
+   set_parent_menu: function(parent) {
+      if(this.parentMenu != parent) { 
+         this.parentMenu = parent;
+      }
+   },
+
+   set_automatic_open_control: function(active) {
+      if(this._automatic_open_control != active) {
+          this._automatic_open_control = active;
+          if(!this._automatic_open_control) {
+             if(Main.popup_rendering)
+                Main.popup_rendering = false;
+             if(this._paint_id > 0)
+                this.actor.disconnect(this._paint_id);
+             this._paint_id = 0;
+          }
+      }
+   },
+
+   _onOrientationChanged: function(a, orientation) {
+       this.setArrowSide(orientation);
+   },
+
+   _on_paint: function(actor) {
+      if (this._paint_count < 2 || this.animating) {
+         this._paint_count++;
+         return;
+      }
+
+      if (this._paint_id > 0) {
+         this.actor.disconnect(this._paint_id);
+         this._paint_id = 0;
+      }
+
+      this._paint_count = 0;
+      Main.popup_rendering = false;
    },
 
    setEffect: function(effect) {
@@ -720,8 +771,11 @@ ConfigurableMenu.prototype = {
 
    repositionActor: function(actor) {
       if((this.sourceActor)&&(this.sourceActor != actor)) {
+         actor._delegate = this.sourceActor._delegate;
+         actor._applet = this.sourceActor._applet;
          if(this.isOpen)
             this._boxPointer.trySetPosition(actor, this._arrowAlignment);
+
       }
    },
 
@@ -738,11 +792,63 @@ ConfigurableMenu.prototype = {
    },
 
    openClean: function(animate) {
-      Applet.AppletPopupMenu.prototype.open.call(this, animate);
+      if (this.isOpen)
+         return;
+      this.old_parent = this.actor.get_parent();
+      if(this.old_parent)
+          this.old_parent.remove_actor(this.actor);
+      Main.uiGroup.add_actor(this.actor);
+      Main.popup_rendering = false;
+
+      if (animate)
+         this.animating = animate;
+      else
+         this.animating = false;
+
+      this.setMaxHeight();
+
+      this.isOpen = true;
+        
+      if (global.menuStackLength == undefined)
+         global.menuStackLength = 0;
+      global.menuStackLength += 1;
+
+      this._boxPointer.setPosition(this.sourceActor, this._arrowAlignment);
+
+      if(this._automatic_open_control)
+          this._paint_id = this.actor.connect("paint", Lang.bind(this, this._on_paint));
+
+      this._boxPointer.show(animate, Lang.bind(this, function () {
+         this.animating = false;
+      }));
+
+      this.actor.raise_top();
+
+      this.emit('open-state-changed', true);
    },
 
    closeClean: function(animate) {
-      Applet.AppletPopupMenu.prototype.close.call(this, animate);
+      if (!this.isOpen)
+         return;
+
+       this.isOpen = false;
+       global.menuStackLength -= 1;
+
+       if(Main.panelManager) {
+          for (let i in Main.panelManager.panels) {
+             if (Main.panelManager.panels[i])
+                Main.panelManager.panels[i]._hidePanel();
+          }
+       }
+
+       if (this._activeMenuItem)
+          this._activeMenuItem.setActive(false);
+
+       this._boxPointer.hide(animate);
+       Main.uiGroup.remove_actor(this.actor);
+        if(this.old_parent)
+          this.old_parent.add_actor(this.actor);
+       this.emit('open-state-changed', false);
    },
 
    open: function(animate) {
@@ -750,7 +856,7 @@ ConfigurableMenu.prototype = {
          this.subMenu.close();*/
       if(!this.isOpen) {
          this.openClean();
-         this.repositionActor(this.sourceActor);
+         this._boxPointer.trySetPosition(this.sourceActor, this._arrowAlignment);
          this._applyEffectOnOpen();
       }
    },
@@ -837,7 +943,7 @@ ConfigurableMenu.prototype = {
          time: this.effectTime,
          transition: 'easeInSine',
          onComplete: Lang.bind(this, function() {
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            this.closeClean(false);
          })
       });
    },
@@ -885,7 +991,7 @@ ConfigurableMenu.prototype = {
          transition: 'easeOutQuad',
          onComplete: Lang.bind(this, function() {
             
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            PopupMenu.PopupMenuBase.prototype.close.call(this, false);
             Tweener.addTween(this.actor,
             {
                 x: 0,
@@ -934,7 +1040,7 @@ ConfigurableMenu.prototype = {
          time: this.effectTime,
          transition: 'easeOutQuad',
          onComplete: Lang.bind(this, function() {
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            this.closeClean(false);
             Tweener.addTween(this.actor,
             {
                 x: 0,
@@ -982,7 +1088,7 @@ ConfigurableMenu.prototype = {
          time: this.effectTime,
          transition: 'easeOutQuad',
          onComplete: Lang.bind(this, function() {
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            this.closeClean(false);
             Tweener.addTween(this.actor,
             {
                 x: 0,
@@ -1033,7 +1139,7 @@ ConfigurableMenu.prototype = {
          time: this.effectTime,
          transition: 'easeOutQuad',
          onComplete: Lang.bind(this, function() {
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            this.closeClean(false);
             Tweener.addTween(this.actor,
             {
                 y: 0,
@@ -1088,7 +1194,7 @@ ConfigurableMenu.prototype = {
          time: this.effectTime,
          transition: 'easeOutQuad',
          onComplete: Lang.bind(this, function() {
-            Applet.AppletPopupMenu.prototype.close.call(this, false);
+            this.closeClean(false);
             Tweener.addTween(this.actor,
             {
                 x: 0, y: 0,
@@ -1107,23 +1213,24 @@ ConfigurableMenu.prototype = {
          this._popupMenu.destroy();
          this._popupMenu = null;
       }
-      Applet.AppletPopupMenu.prototype.destroy.call(this);
+      PopupMenu.PopupMenuBase.prototype.destroy.call(this);
    }
 };
 
-function ConfigurablePopupMenu(parent, parentMenu, orientation) {
-   this._init(parent, parentMenu, orientation);
+function ConfigurablePopupMenu(launcher, arrowAlignment, orientation, parentMenu) {
+   this._init(launcher, arrowAlignment, orientation, parentMenu);
 };
 
 ConfigurablePopupMenu.prototype = {
    __proto__: ConfigurableMenu.prototype,
 
-   _init: function(parent, parentMenu, orientation) {
-      ConfigurableMenu.prototype._init.call(this, parentMenu, orientation);
-      this.parent = parent;
+   _init: function(launcher, arrowAlignment, orientation, parentMenu) {
+      ConfigurableMenu.prototype._init.call(this, parentMenu, arrowAlignment, orientation, this);
       this.parentMenu = parentMenu;
+      if(this.parentMenu)
+          this.parent_sourceActor = this.parentMenu.sourceActor;
       this.fixScreen = false;
-      if(this.parentMenu instanceof ConfigurableMenu)
+      if((this.parentMenu)&&(this.parentMenu instanceof ConfigurableMenu))
          this.parentMenu.setSubMenu(this);
       this.actor.add_style_class_name('menu-context-menu');
    },
@@ -1140,11 +1247,11 @@ ConfigurablePopupMenu.prototype = {
 
    fixToScreen: function(fixScreen) {
       try {
-         if(fixScreen) {
-            this._boxPointer.fixToScreen(this.parent.menu.actor, fixScreen);
-         } else {
+         if(fixScreen) //{
+            this._boxPointer.fixToScreen(this.sourceActor, fixScreen);
+         /*} else {
             this._boxPointer.fixToScreen(this.parentMenu.actor, fixScreen);
-         }
+         }*/
          this.fixScreen = fixScreen;
       } catch(e) {
          Main.notify("eee", e.message);
@@ -1178,19 +1285,28 @@ ConfigurablePopupMenu.prototype = {
    },
 
    open: function(animate) {
-      if((this.parentMenu != this.parent)&&(!this.parentMenu.isOpen))
-         return;
-      //(Dalcde idea)Temporarily change source actor to Main.uiGroup to "trick"
-      // the menu manager to think that right click submenus are part of it.
-      this.parentMenu.sourceActor = Main.uiGroup;
-      Applet.AppletPopupMenu.prototype.open.call(this, animate);
+      /*if((this.parentMenu != this.parent)&&(!this.parentMenu.isOpen))
+         return;*/
+
+    try {
+         Main.notify("open" + this.parentMenu.isOpen)
+      if(this.parentMenu.isOpen) {
+         //(Dalcde idea)Temporarily change source actor to Main.uiGroup to "trick"
+         // the menu manager to think that right click submenus are part of it.
+         Main.notify("open")
+         this.parent_sourceActor = this.parentMenu.sourceActor;
+         this.parentMenu.sourceActor = Main.uiGroup;
+
+         ConfigurableMenu.prototype.openClean.call(this, animate);
+      }
+     } catch(e) {Main.notify("e" +e.message)}
    },
 
    close: function(animate) {
-      this.parentMenu.sourceActor = this.parent.actor;
-      Applet.AppletPopupMenu.prototype.close.call(this, animate);
-      if((this.parentMenu.isOpen)&&(this.parent.searchEntry))
-         this.parent.searchEntry.grab_key_focus();
+      this.parentMenu.sourceActor = this.parent_sourceActor;
+      ConfigurableMenu.prototype.closeClean.call(this, animate);
+      //if((this.parentMenu.isOpen)&&(this.parent.searchEntry))
+      //   this.parent.searchEntry.grab_key_focus();
    }
 };
 
@@ -1213,6 +1329,8 @@ ConfigurablePopupSwitchMenuItem.prototype = {
         this.label.set_margin_left(6.0);
 
         this._switch = new PopupMenu.Switch(active);
+        this._switch.actor.set_style_class_name("toggle-switch");
+        this._switch.actor.add_style_class_name("toggle-switch-intl");
 
         if(active)
            this.icon = new St.Icon({ icon_name: this._imageOn, icon_type: St.IconType.FULLCOLOR, style_class: 'popup-menu-icon' });
@@ -1244,44 +1362,406 @@ ConfigurablePopupSwitchMenuItem.prototype = {
     }
 };
 
-function ConfigurableMenuApplet(launcher, orientation) {
-   this._init(launcher, orientation);
+function RadioButton() {
+    this._init.apply(this, arguments);
+}
+
+RadioButton.prototype = {
+    _init: function(state) {
+        this.actor = new St.Bin({ style_class: 'radiobutton' });/*,
+                                  accessible_role: Atk.Role.CHECK_BOX });*/
+        //this.actor.set_style_class_name("check-box");
+        this.setToggleState(state);
+        this.actor.style = "background-image: url('radiobutton-off.svg');";
+    },
+
+    setToggleState: function(state) {
+        this.actor.change_style_pseudo_class('checked', state);
+        this.state = state;
+    },
+
+    toggle: function() {
+        this.setToggleState(!this.state);
+    }
+};
+
+function Switch() {
+    this._init.apply(this, arguments);
+}
+
+Switch.prototype = {
+    _init: function(state) {
+        this.actor = new St.Bin({ style_class: 'toggle-switch' ,
+                                  accessible_role: Atk.Role.CHECK_BOX});
+        // Translators: this MUST be either "toggle-switch-us"
+        // (for toggle switches containing the English words
+        // "ON" and "OFF") or "toggle-switch-intl" (for toggle
+        // switches containing "O" and "|"). Other values will
+        // simply result in invisible toggle switches.
+        this.actor.add_style_class_name("toggle-switch-intl");
+        this.setToggleState(state);
+    },
+
+    setToggleState: function(state) {
+        this.actor.change_style_pseudo_class('checked', state);
+        this.state = state;
+    },
+
+    toggle: function() {
+        this.setToggleState(!this.state);
+    }
+};
+
+/**
+ * ConfigurablePopupSubMenuMenuItem
+ *
+ * A class to extend the cinnamon standar PopupMenuSection
+ * to support create an space area on some special context.
+ */
+function ConfigurablePopupSubMenuMenuItem() {
+    this._init.apply(this, arguments);
+}
+
+ConfigurablePopupSubMenuMenuItem.prototype = {
+    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
+
+    _init: function(text, hide_expander) {
+        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+
+        this.actor.add_style_class_name('popup-submenu-menu-item');
+
+        let table = new St.Table({ homogeneous: false,
+                                      reactive: true });
+
+        if (!hide_expander) {
+            this._triangle = new St.Icon({ icon_name: "media-playback-start",
+                                icon_type: St.IconType.SYMBOLIC,
+                                style_class: 'popup-menu-icon' });
+
+            table.add(this._triangle,
+                    {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
+
+            this.label = new St.Label({ text: text });
+            this.label.set_margin_left(6.0);
+            table.add(this.label,
+                    {row: 0, col: 1, col_span: 1, x_align: St.Align.START});
+        }
+        else {
+            this.label = new St.Label({ text: text });
+            table.add(this.label,
+                    {row: 0, col: 0, col_span: 1, x_align: St.Align.START});
+        }
+        this.actor.label_actor = this.label;
+        this.addActor(table, { expand: true, span: 1, align: St.Align.START });
+
+        this.menu = new ConfigurablePopupMenu(null, 0.0, St.Side.LEFT);
+        this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
+        this.actor.connect('button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
+        this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
+    },
+
+    _onButtonReleaseEvent: function (actor, event) {
+        this.activate(event, false);
+        return true;
+    },
+
+   activate: function(event) {
+    try {
+      let topMenu = this._getTopMenu(this.actor.get_parent());
+      if(!topMenu)
+         return false;
+
+      this.menu.set_parent_menu(topMenu);
+      this.menu.set_launcher(topMenu);
+
+      if(this == topMenu._openedSubMenu)
+         return false;
+
+      if(topMenu._openedSubMenu && topMenu._openedSubMenu.isOpen)
+         topMenu._openedSubMenu.close(false);
+
+      topMenu._openedSubMenu = this;
+      this.menu.open(true);
+    } catch(e) {Main.notify("" + e.message);}
+      return true
+   },
+
+   _getTopMenu: function(actor) {
+      while(actor) {
+         if((actor._delegate) && (actor._delegate instanceof PopupMenu.PopupMenu))
+            return actor._delegate;
+         actor = actor.get_parent();
+      }
+      return null;
+   }
+};
+
+/**
+ * ConfigurablePopupMenuSection
+ *
+ * A class to extend the cinnamon standar PopupMenuSection
+ * to support create an space area on some special context.
+ */
+function ConfigurablePopupMenuSection() {
+    this._init.apply(this, arguments);
+}
+
+ConfigurablePopupMenuSection.prototype = {
+    __proto__: PopupMenu.PopupMenuSection.prototype,
+
+    _init: function() {
+        PopupMenu.PopupMenuSection.prototype._init.call(this);
+    },
+};
+
+/**
+ * ConfigurablePopupMenuItem
+ *
+ * A class to extend the cinnamon standar PopupMenuItem
+ * to support ornaments and automatically close the submenus.
+ */
+function ConfigurablePopupMenuItem() {
+    this._init.apply(this, arguments);
+}
+
+ConfigurablePopupMenuItem.prototype = {
+    __proto__: PopupMenu.PopupMenuItem.prototype,
+
+    _init: function(text, params) {
+        //PopupMenu.PopupBaseMenuItem.prototype._init.call(this, params);
+        params = Params.parse (params, { reactive: true,
+                                         activate: true,
+                                         hover: true,
+                                         sensitive: true,
+                                         style_class: null,
+                                         focusOnHover: true,
+                                         hideIcon: true
+                                       });
+        this.actor = new St.BoxLayout({ style_class: 'popup-menu-item',
+                                        reactive: params.reactive,
+                                        track_hover: params.reactive,
+                                        can_focus: params.reactive,
+                                        accessible_role: Atk.Role.MENU_ITEM
+                                     });
+        this.actor.connect('style-changed', Lang.bind(this, this._onStyleChanged));
+        this.actor._delegate = this;
+
+        this._children = [];
+        this._dot = null;
+        this._columnWidths = null;
+        this._spacing = 0;
+        this.active = false;
+        this._activatable = params.reactive && params.activate;
+        this.sensitive = true;
+        this.focusOnHover = params.focusOnHover;
+
+        this.setSensitive(this._activatable && params.sensitive);
+
+        if (params.style_class)
+            this.actor.add_style_class_name(params.style_class);
+
+        if (this._activatable) {
+            this.actor.connect('button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
+            this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
+        }
+        if (params.reactive && params.hover)
+            this.actor.connect('notify::hover', Lang.bind(this, this._onHoverChanged));
+        if (params.reactive) {
+            this.actor.connect('key-focus-in', Lang.bind(this, this._onKeyFocusIn));
+            this.actor.connect('key-focus-out', Lang.bind(this, this._onKeyFocusOut));
+        }
+
+        this._icon = new St.Icon({ style_class: 'popup-menu-icon' });
+        this.label = new St.Label({ text: text });
+        this.actor.label_actor = this.label;
+        this._ornament = new St.BoxLayout();
+        this.actor.add(this._icon, { x_align: St.Align.START });
+        this.actor.add(this.label, { y_align: St.Align.MIDDLE, y_fill:false, expand: true });
+        this.actor.add(this._ornament, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false, expand: true });
+        if (params.hideIcon)
+            this._icon.hide();
+    },
+
+    setOrnament: function(ornamentType, status) {
+        try {
+        this._ornament.get_children().forEach(function(child) {
+            child.destroy();
+        });
+        if (ornamentType == OrnamentType.CHECK) {
+            let switchOrnament = new Switch(status);
+            this._ornament.add(switchOrnament.actor);
+            //Main.notify("hola CHECK")
+        } else if (ornamentType == OrnamentType.DOT) {
+            //Main.notify("hola CHECK")
+            let radioOrnament = new RadioButton(status);
+            //Main.notify("hola CHECK")
+            this._ornament.add(radioOrnament.actor);
+            let label = new St.Label();
+            label.set_text("proba");
+            //this._ornament.add(label);
+            //Main.notify("hola RADIO")
+            //this._ornament.set_text('\u2022');
+            //this.actor.add_accessible_state(Atk.StateType.CHECKED);
+        } else {
+            //Main.notify("hola NONE")
+            //this._ornament.set_text('');
+            //this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+        }
+        } catch(e) {Main.notify("error " + e.message);}
+    }
+};
+
+// A class to hacked the cinnamon standar PopupSubMenuMenuItem
+// to be displayed how a AppletPopupMenu.
+function ConfigurableMenuApplet() {
+    this._init.apply(this, arguments);
 }
 
 ConfigurableMenuApplet.prototype = {
-    __proto__: PopupMenu.PopupMenuBase.prototype,
+    //__proto__: PopupMenu.PopupMenuBase.prototype,
+    __proto__: PopupMenu.PopupMenu.prototype, // compatibility reasons
 
-   _init: function(launcher, orientation) {
-      PopupMenu.PopupMenuBase.prototype._init.call(this, launcher.actor, 'popup-menu-content');
-      this.launcher = launcher;
-      this.orientation = orientation;
-      this.actor = this.box;
+   _init: function(launcher, orientation, menuManager) {
+      PopupMenu.PopupMenuBase.prototype._init.call(this, launcher.actor, 'applet-container-box');
+      this._launcher = launcher;
+      this._orientation = orientation;
+      this._menuManager = menuManager;
+      this.actor = new St.BoxLayout({ style_class: 'applet-container-box', reactive: false, track_hover: false });
       this.actor.vertical = false;
+      this.actor.hide();
+      this._launcher.actor.add(this.actor);
+      this._launcher.actor.set_reactive(false);
+      this._launcher.actor.set_track_hover(false);
+      this.menu = new ConfigurableMenu(this._launcher, 0.0, this._orientation);
+      let section = new PopupMenu.PopupMenuSection();
+      this.menu.addMenuItem(section);
+      this.menu._section = section;
+      this._menuManager.addMenu(this.menu);
+      this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
+      this.default_displayed = true;
    },
 
    open: function() {
+      this.isOpen = true;
       this.actor.show();
    },
 
    close: function() {
+      this.isOpen = false;
       this.actor.hide();
    },
+
+   addMenuItem: function(menuItem, position) {
+      PopupMenu.PopupMenuBase.prototype.addMenuItem.call(this, menuItem, position);
+      if(menuItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+           let position = this._getMenuItems().indexOf(menuItem);
+           this._reparent_submenu_menuitem(menuItem, position);
+      } else {
+          global.log("Try to insert a no compatible item " + menuItem + " at the position " + position);
+          throw TypeError('The ConfigurableMenuApplet only allow to have PopupSubMenuMenuItem as a children');
+      }  
+   },
+
+   _reparent_submenu_menuitem: function(menuItem, position) {
+       menuItem.actor.hide();
+       //Extract the label from the table and remove the rest of items.
+       let children = menuItem.actor.get_children();
+       let table = children[0];
+       table.remove_actor(menuItem.label);
+       if(menuItem._triangle)
+           menuItem._triangle.destroy();
+       menuItem.label.set_style_class_name('applet-label');//'menu-application-button-label');
+       menuItem.actor.destroy_all_children();
+       menuItem.disconnect(menuItem._activateId);
+       menuItem.menu.disconnect(menuItem._subMenuActivateId);
+       menuItem._activateId = menuItem.connect('activate', Lang.bind(menuItem, function (menuItem, event, keepMenu) {
+            menuItem.emit('activate', menuItem, keepMenu);
+       }));
+       /*menuItem._subMenuActivateId = menuItem.menu.connect('activate', Lang.bind(menuItem.menu, function(submenu, submenuItem, keepMenu) {
+            Main.notify("holaaaaaaaaaa2222222")
+            submenu.emit('activate');
+       }));*/
+       menuItem._subMenuActivateId = 0;
+
+       let actor_applet = new St.BoxLayout({ style_class: 'applet-box', reactive: true, track_hover: true });
+       actor_applet._delegate_item = menuItem;
+       actor_applet.connect('button-press-event', Lang.bind(this, this._onButtonPressEvent));
+       this.actor.add(actor_applet, { y_fill: true });
+       actor_applet.add(menuItem.label, { y_fill: false });
+       menuItem.label.realize();
+
+       let parent = menuItem.menu.actor.get_parent();
+       if(parent)
+           parent.remove_actor(menuItem.menu.actor);
+       if(menuItem.menu.set_parent_menu) {
+           menuItem.menu.set_parent_menu(this.menu);
+           menuItem.menu.set_launcher(this._launcher);
+           let menuManager = new PopupMenu.PopupMenuManager(this._launcher);
+           menuManager.addMenu(menuItem.menu);
+       }
+       menuItem.menu._arrow = null;
+       menuItem.menu.actor.set_style_class_name('');
+       menuItem.menu.actor.style = "-arrow-border-radius: 0px; \
+                                    -arrow-background-color: rgba(80,80,80,0.0); \
+                                    -arrow-border-width: 0px; \
+                                    -arrow-border-color: #a5a5a5; \
+                                    -arrow-base: 0px; \
+                                    -arrow-rise: 0px;"
+       menuItem.menu.open = function(animate) {};
+       menuItem.menu.close = Lang.bind(this, function(animate) {
+          if(this.menu.isOpen)
+              this.menu.closeClean();
+       });
+       this.menu._section.actor.add(menuItem.menu.actor,
+          {x_fill: true, y_fill: true, y_align: St.Align.START, expand: true});
+       menuItem.menu.actor.hide();
+   },
+/*
+   _onItemButtonReleaseEvent: function (actor, event) {
+       this.menu.current.activate(event, false);
+       return true;
+   },
+*/
+   _onOpenStateChanged: function(menu, open) {
+      this.menu.current.menu.emit('open-state-changed', open);
+   },
+
+   _onButtonPressEvent: function (actor, event) {
+         let section_actor = this.menu._section.actor;
+         this.menu.current = actor._delegate_item;
+         let children = section_actor.get_children();
+         for(let i = 0; i < children.length; i++) {
+            children[i]._delegate.close();
+            children[i].hide();
+         }
+         this.menu.current.menu.actor.show();
+         this.menu.current.menu.isOpen = true;
+         if(!this.menu.isOpen)
+            this.menu.openClean();
+         this.menu.repositionActor(actor);
+   },
+
+   destroy: function() {
+      PopupMenu.PopupMenuBase.prototype.destroy.call(this);
+      if(this.menu.isOpen)
+         this.menu.closeClean();
+      this.menu.destroy();
+      this.actor.destroy();
+   }
 };
 /*
-function ConfigurableSubMenuMenuItem() {
+function ConfigurableSubMenuMenuSwapper() {
     this._init.apply(this, arguments);
 }
 
-ConfigurableSubMenuMenuItem.prototype = {
-    __proto__: PopupSubMenuMenuItem.prototype,
+ConfigurableSubMenuMenuSwapper.prototype = {
+    __proto__: ConfigurableMenu.prototype,
 
-    _init: function(text, hide_expander) {
-        PopupSubMenuMenuItem.prototype._init.call(this);
+    _init: function(launcher, orientation, subMenu) {
+        ConfigurableMenu.prototype._init.call(this, launcher, orientation, subMenu);
     },
 
     set_subMenu: function(menu) {
-        this.menu.destroy();
-        this.menu = menu;
         this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
     }
 };
@@ -1303,3 +1783,438 @@ ConfigurableMenuTextIconItem.prototype = {
    set_orientation: function(orientation) {
    }
 };*/
+
+/**
+ * A MenuFactory to displayed an abstract dBus menu items inside clutter objects
+ *
+ * Processes events, creates the clutter actors and handles the action on a bidirectional way
+ */
+function MenuFactory() {
+    this._init.apply(this, arguments);
+}
+
+MenuFactory.prototype = {
+
+    _init: function(launcher, orientation, params) {
+        this._launcher = launcher;
+        this._orientation = orientation;
+        this.set_popup_menu_base_class(params);
+    },
+
+    set_popup_menu_base_class: function(params) {
+        params = Params.parse (params, { RootMenuClass: PopupMenu.PopupSubMenuMenuItem,
+                                         MenuItemClass: PopupMenu.PopupMenuItem,
+                                         SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
+                                         MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
+                                         SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem,
+                                       });
+        this.RootMenuClass = params.RootMenuClass;
+        this.SubMenuMenuItemClass = params.SubMenuMenuItemClass;
+        this.MenuSectionMenuItemClass = params.MenuSectionMenuItemClass;
+        this.SeparatorMenuItemClass = params.SeparatorMenuItemClass;
+        this.MenuItemClass = params.MenuItemClass;
+    },
+
+    build_shell_menu: function(dbus_menu, menuManager) {
+        if(!menuManager)
+            menuManager = new PopupMenu.PopupMenuManager(this._launcher);
+     
+        let shellItem = new this.RootMenuClass(this._launcher, this._orientation, menuManager); // the shell menu
+
+        if(shellItem instanceof Applet.AppletPopupMenu) {
+            menuManager.addMenu(shellItem);
+        }
+
+        let dbusItem = dbus_menu.get_root();
+
+        shellItem._dbusItem = dbusItem;
+        this._attachToMenu(shellItem);
+
+        return shellItem;
+    },
+
+    // This will attach the root dbusItem to an already existing menu that will be used as the root menu.
+    // it will also connect the dbusItem to be automatically destroyed when the menu dies.
+    _attachToMenu: function(shellItem) {
+        // cleanup: remove existing childs (just in case)
+        shellItem.removeAll();
+
+        // connect handlers
+        shellItem._menuDisconnectHandlers = [];
+        Utility.connectAndSaveId(shellItem, {
+            'open-state-changed': Lang.bind(this, this._onShellMenuOpened),
+            'destroy'           : Lang.bind(this, this._onDestroyShellMenu)
+        }, shellItem._menuDisconnectHandlers);
+        let dbusItem = shellItem._dbusItem;
+        if(dbusItem) {
+            Utility.connectAndSaveId(dbusItem, {
+                'child-added'   : Lang.bind(this, this._onRootChildAdded, shellItem),
+                'child-removed' : Lang.bind(this, this._onRootChildRemoved, shellItem),
+                'child-moved'   : Lang.bind(this, this._onRootChildMoved, shellItem),
+                'dropped'       : Lang.bind(this, this._onRootChildDropped, shellItem)
+            }, dbusItem._signals_handlers);
+
+            // fill the menu for the first time
+            dbusItem.get_children().forEach(function(child) {
+                shellItem.addMenuItem(this._createItem(child));
+            }, this);
+        }
+    },
+
+    _onRootChildDropped: function(dbusItem, shellItem) {
+        if (shellItem) {
+            this.emit("dropped", shellItem);
+        }
+    },
+
+    _onRootChildAdded: function(dbusItem, child, position, shellItem) {
+        if (shellItem) {
+            shellItem.addMenuItem(this._createItem(child), position);
+        }
+    },
+
+    _onRootChildRemoved: function(dbusItem, child, shellItem) {
+        // children like to play hide and seek
+        // but we know how to find it for sure!
+        if (shellItem) {
+            shellItem._getMenuItems().forEach(function(item) {
+                if (item._dbusItem == child)
+                    item.destroy();
+            });
+        }
+    },
+
+    _onRootChildMoved: function(dbusItem, child, oldpos, newpos, shellItem) {
+        if (shellItem) {
+            this._moveItemInMenu(shellItem, dbusItem, newpos);
+        }
+    },
+
+    _onDestroyShellMenu: function(shellItem) {
+        if (shellItem) {
+            Utility.disconnectArray(shellItem, shellItem._menuDisconnectHandlers);
+
+            let dbusItem = shellItem._dbusItem;
+            if (dbusItem) {
+                Utility.disconnectArray(dbusItem, dbusItem._signals_handlers);
+                dbusItem.destroy();
+            }
+        }
+    },
+
+    _onShellMenuOpened: function(shellItem, state) {
+        let dbusItem = shellItem._dbusItem;
+        if (!dbusItem) return;
+
+        if (state) {
+            dbusItem.handle_event("opened");
+        } else {
+            dbusItem.handle_event("closed");
+        }
+    },
+
+    _setOrnamentPolyfill: function(ornamentType) {
+        if (ornamentType == OrnamentType.CHECK) {
+            this._ornament.set_text('\u2713');
+            this.actor.add_accessible_state(Atk.StateType.CHECKED);
+        } else if (ornamentType == OrnamentType.DOT) {
+            this._ornament.set_text('\u2022');
+            this.actor.add_accessible_state(Atk.StateType.CHECKED);
+        } else {
+            this._ornament.set_text('');
+            this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+        }
+    },
+
+    // GS3.8 uses a complicated system to compute the allocation for each child in pure JS
+    // we hack together a function that allocates space for our ornament, using the x
+    // calculations normally used for the dot and the y calculations used for every
+    // other item. Thank god they replaced that whole allocation stuff in 3.10, so I don't
+    // really need to understand how it works, as long as it looks right in 3.8
+    _allocateOrnament: function(actor, box, flags, shellItem) {
+        if (!shellItem._ornament) return;
+
+        let height = box.y2 - box.y1;
+        let direction = actor.get_text_direction();
+
+        let dotBox = new Clutter.ActorBox();
+        let dotWidth = Math.round(box.x1 / 2);
+
+        if (direction == Clutter.TextDirection.LTR) {
+            dotBox.x1 = Math.round(box.x1 / 4);
+            dotBox.x2 = dotBox.x1 + dotWidth;
+        } else {
+            dotBox.x2 = box.x2 + 3 * Math.round(box.x1 / 4);
+            dotBox.x1 = dotBox.x2 - dotWidth;
+        }
+
+        let [minHeight, naturalHeight] = shellItem._ornament.get_preferred_height(dotBox.x2 - dotBox.x1);
+
+        dotBox.y1 = Math.round(box.y1 + (height - naturalHeight) / 2);
+        dotBox.y2 = dotBox.y1 + naturalHeight;
+
+        shellItem._ornament.allocate(dotBox, flags);
+    },
+
+    _createItem: function(dbusItem) {
+        // first, decide whether it's a submenu or not
+        let shellItem;
+        if (dbusItem.get_children_display() == "submenu")
+            shellItem = new this.SubMenuMenuItemClass("FIXME");
+        else if (dbusItem.get_children_display() == "section")
+            shellItem = new this.MenuSectionMenuItemClass();
+        else if (dbusItem.get_type() == "separator")
+            shellItem = new this.SeparatorMenuItemClass('');
+        else
+            shellItem = new this.MenuItemClass("FIXME");
+
+        shellItem._dbusItem = dbusItem;
+
+        if (shellItem instanceof this.MenuItemClass) {
+            // GS3.8: emulate the ornament stuff.
+            // this is similar to how the setShowDot function works
+            if (!shellItem.setOrnament) {
+                shellItem._icon = new St.Icon({ style_class: 'popup-menu-icon', x_align: St.Align.END });
+                if (shellItem.addActor) { //GS 3.8
+                    shellItem.addActor(shellItem._icon, { align: St.Align.END });
+                } else { //GS >= 3.10
+                    shellItem.actor.add(shellItem._icon, { x_align: St.Align.END });
+                    shellItem.label.get_parent().child_set(shellItem.label, { expand: true });
+                }
+                shellItem._ornament = new St.Label();
+                shellItem.actor.add_actor(shellItem._ornament);
+                shellItem.setOrnament = this._setOrnamentPolyfill;
+                shellItem.actor.connect('allocate', Lang.bind(this, this._allocateOrnament, shellItem)); //GS doesn't disconnect that one, either
+                //shellItem.actor.set_margin_left(6.0);
+            }
+        }
+
+        // initialize our state
+        this._updateLabel(shellItem);
+        this._updateOrnament(shellItem);
+        this._updateImage(shellItem);
+        this._updateVisible(shellItem);
+        this._updateSensitive(shellItem);
+
+        // initially create children
+        if (shellItem instanceof this.SubMenuMenuItemClass) {
+            let children = dbusItem.get_children();
+            for (let i = 0; i < children.length; ++i) {
+                let ch_item = this._createItem(children[i]);
+                ch_item._parent = shellItem;
+                shellItem.menu.addMenuItem(ch_item);
+            }
+        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
+            let children = dbusItem.get_children();
+            for (let i = 0; i < children.length; ++i) {
+                let ch_item = this._createItem(children[i]);
+                ch_item._parent = shellItem;
+                shellItem.addMenuItem(ch_item);
+            }
+        }
+        // now, connect various events
+        Utility.connectAndRemoveOnDestroy(dbusItem, {
+            'property-changed':   Lang.bind(this, this._onPropertyChanged, shellItem),
+            'child-added':        Lang.bind(this, this._onChildAdded, shellItem),
+            'child-removed':      Lang.bind(this, this._onChildRemoved, shellItem),
+            'child-moved':        Lang.bind(this, this._onChildMoved, shellItem)
+        }, shellItem);
+
+        Utility.connectAndRemoveOnDestroy(shellItem, {
+            'activate':  Lang.bind(this, this._onActivate, shellItem)
+        });
+
+        if (shellItem.menu) {
+            Utility.connectAndRemoveOnDestroy(shellItem.menu, {
+                "open-state-changed": Lang.bind(this, this._onOpenStateChanged, shellItem)
+            });
+            shellItem.actor.connect("button-release-event", Lang.bind(this, this._onShellMenuPreOpened));
+        }
+        return shellItem;
+    },
+
+    _onOpenStateChanged: function(menu, open, shellItem) {
+        if (open) {
+            shellItem._dbusItem.handle_event("opened");
+        } else {
+            shellItem._dbusItem.handle_event("closed");
+        }
+    },
+
+    _onActivate: function(shellItem) {
+        let dbusItem = shellItem._dbusItem;
+        if (dbusItem) {
+            dbusItem.handle_event("clicked");
+        }
+    },
+
+    _onShellMenuPreOpened: function(actor, event) {
+        let shellItem = actor._delegate;
+        if ((shellItem) || (shellItem.menu)) {
+            let top_menu = this._getTopMenu(shellItem.menu);
+            if ((top_menu) && (shellItem != top_menu._openedSubMenu)) {
+                if (top_menu._openedSubMenu && top_menu._openedSubMenu.isOpen)
+                    top_menu._openedSubMenu.close(true);
+                top_menu._openedSubMenu = shellItem.menu;
+            }
+        }
+    },
+
+    _onPropertyChanged: function(dbusItem, prop, value, shellItem) {
+        if (prop == "toggle-type" || prop == "toggle-state")
+            this._updateOrnament(shellItem);
+        else if (prop == "label")
+            this._updateLabel(shellItem);
+        else if (prop == "enabled")
+            this._updateSensitive(shellItem);
+        else if (prop == "visible")
+            this._updateVisible(shellItem);
+        else if (prop == "icon-name" || prop == "icon-data")
+            this._updateImage(shellItem);
+        else if (prop == "type" || prop == "children-display")
+            this._replaceSelf(shellItem);
+        /*else
+            global.logWarning("Unhandled property change: "+prop);*/
+    },
+
+    _onChildAdded: function(dbusItem, child, position, shellItem) {
+        if (shellItem instanceof this.SubMenuMenuItemClass) {
+            shellItem.menu.addMenuItem(this._createItem(child), position);
+        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
+            shellItem.addMenuItem(this._createItem(child), position);
+        } else {
+            global.logWarning("Tried to add a child to non-submenu item. Better recreate it as whole");
+            this._replaceSelf(shellItem, dbusItem);
+        }
+    },
+
+    _onChildRemoved: function(dbusItem, child, shellItem) {
+        if (shellItem instanceof this.SubMenuMenuItemClass) {
+            // find it!
+            shellItem.menu._getMenuItems().forEach(function(item) {
+                if (item._dbusItem == child)
+                    item.destroy();
+            });
+        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
+            shellItem._getMenuItems().forEach(function(item) {
+                if (item._dbusItem == child)
+                    item.destroy();
+            });
+        } else {
+            global.logWarning("Tried to remove a child from non-submenu item. Better recreate it as whole");
+            this._replaceSelf(shellItem, dbusItem);
+        }
+    },
+
+    _onChildMoved: function(dbusItem, child, oldpos, newpos, shellItem) {
+        if (shellItem instanceof this.SubMenuMenuItemClass) {
+            this._moveItemInMenu(shellItem.menu, child, newpos);
+        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
+            this._moveItemInMenu(shellItem, child, newpos);
+        } else {
+            global.logWarning("Tried to move a child in non-submenu item. Better recreate it as whole");
+            this._replaceSelf(shellItem, dbusItem);
+        }
+    },
+
+    _updateLabel: function(shellItem) {
+        let label = shellItem._dbusItem.get_label();
+
+        if (shellItem.label) // especially on GS3.8, the separator item might not even have a hidden label
+            shellItem.label.set_text(label);
+    },
+
+    _updateOrnament: function(shellItem) {
+        if (!shellItem.setOrnament) return; // separators and alike might not have gotten the polyfill
+        if (shellItem._dbusItem.get_toggle_type() == "checkmark") {
+            shellItem.setOrnament(OrnamentType.CHECK, shellItem._dbusItem.get_toggle_state());
+        } else if (shellItem._dbusItem.get_toggle_type() == "radio") {
+            shellItem.setOrnament(OrnamentType.DOT, shellItem._dbusItem.get_toggle_state());
+        } else {
+            shellItem.setOrnament(OrnamentType.NONE);
+        }
+    },
+
+    _updateImage: function(shellItem) {
+        if (!shellItem._icon) return; // might be missing on submenus / separators
+
+        let iconName = shellItem._dbusItem.get_icon_name();
+        if (iconName) {
+            shellItem._icon.icon_name = iconName;
+            shellItem._icon.show();
+        } else {
+            let gicon = shellItem._dbusItem.get_gdk_icon();
+            if (gicon) {
+                shellItem._icon.gicon = gicon;
+                shellItem._icon.show();
+            }
+        }
+    },
+
+    _updateVisible: function(shellItem) {
+        shellItem.actor.visible = shellItem._dbusItem.is_visible();
+    },
+
+    _updateSensitive: function(shellItem) {
+        //Cinnamon PopupMenuSection have not setSensitive
+        if (!(shellItem instanceof this.MenuSectionMenuItemClass))
+            shellItem.setSensitive(shellItem._dbusItem.is_enabled());
+    },
+
+    _replaceSelf: function(shellItem, dbusItem) {
+        // create our new self if needed
+        if (!shellItem)
+            shellItem = this._createItem(dbusItem);
+        // first, we need to find our old position
+        let pos = -1;
+        if(shellItem._parent) {
+            let family = shellItem._parent.menu._getMenuItems();
+            for (let i = 0; i < family.length; ++i) {
+                if (family[i] === shellItem)
+                    pos = i;
+            }
+        }
+
+        if (pos < 0) {
+            //throw new Error("DBusMenu: can't replace non existing menu item");
+        } else {
+            // add our new self while we're still alive
+            shellItem._parent.menu.addMenuItem(shellItem, pos);
+            // now destroy our old self
+            shellItem.destroy();
+        }
+    },
+
+    _getTopMenu: function(shellItem) {
+        let actor = shellItem.actor;
+        while (actor) {
+            if ((actor._delegate) && (actor._delegate instanceof PopupMenu.PopupMenu))
+               return actor._delegate;
+            actor = actor.get_parent();
+       }
+       return null;
+   },
+
+    _moveItemInMenu: function(menu, dbusItem, newpos) {
+        //HACK: we're really getting into the internals of the PopupMenu implementation
+
+        // First, find our wrapper. Children tend to lie. We do not trust the old positioning.
+        let family = menu._getMenuItems();
+        for (let i = 0; i < family.length; ++i) {
+            if (family[i]._dbusItem == dbusItem) {
+                // now, remove it
+                menu.box.remove_child(family[i].actor);
+
+                // and add it again somewhere else
+                if (newpos < family.length && family[newpos] != family[i])
+                    menu.box.insert_child_below(family[i].actor, family[newpos].actor);
+                else
+                    menu.box.add(family[i].actor);
+
+                // skip the rest
+                return;
+            }
+        }
+    }
+};
+Signals.addSignalMethods(MenuFactory.prototype);

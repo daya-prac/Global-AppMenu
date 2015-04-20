@@ -1,6 +1,20 @@
-const Gio = imports.gi.Gio;
+// Copyright (C) 2014-2015 Lester Carballo Pérez <lestcape@gmail.com>
+//
+// This program is free software; you can redistribute it and/or
+// modify it under the terms of the GNU General Public License
+// as published by the Free Software Foundation; either version 2
+// of the License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program; if not, write to the Free Software
+// Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
 const St = imports.gi.St;
-const Signals = imports.signals;
 const Lang = imports.lang;
 
 const Applet = imports.ui.applet;
@@ -10,8 +24,7 @@ const PopupMenu = imports.ui.popupMenu;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
 const IndicatorAppMenuWatcher = AppletPath.indicatorAppMenuWatcher;
-const Cinnamon = imports.gi.Cinnamon;
-//const ConfigurableMenus = AppletPath.configurableMenus;
+const ConfigurableMenus = AppletPath.configurableMenus;
 
 function MyApplet(metadata, orientation, panel_height, instance_id) {
     this._init(metadata, orientation, panel_height, instance_id);
@@ -29,11 +42,41 @@ MyApplet.prototype = {
             this.set_applet_tooltip("Global application menu");
             this.status_notifier_watcher = null;
             this._indicator_icons = [];
-            this.icon_signal_id = 0;
-            this.label_signal_id = 0;
+
+            this.actorIcon = new St.Bin();
+            this.actorLabel = new St.Label({ style_class: 'applet-label' });
+            this.actor.add(this.actorIcon, { y_align: St.Align.MIDDLE, y_fill: false });
+            this.actor.add(this.actorLabel, { y_align: St.Align.MIDDLE, y_fill: false });
 
             this.settings = new Settings.AppletSettings(this, this.uuid, instance_id);
-            this.indicatorDbus = new IndicatorAppMenuWatcher.IndicatorAppMenuWatcher(this, IndicatorAppMenuWatcher.AppmenuMode.MODE_STANDARD);
+           /*this.menuFactory = new ConfigurableMenus.MenuFactory(this, this.orientation, {
+                RootMenuClass: Applet.AppletPopupMenu,
+                MenuItemClass: PopupMenu.PopupMenuItem,
+                SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
+                MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
+                SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
+            });*/
+            /*this.menuFactory = new ConfigurableMenus.MenuFactory(this, this.orientation, {
+                RootMenuClass: ConfigurableMenus.ConfigurableMenuApplet,
+                MenuItemClass: ConfigurableMenus.ConfigurablePopupMenuItem,
+                SubMenuMenuItemClass: ConfigurableMenus.ConfigurablePopupSubMenuMenuItem,
+                MenuSectionMenuItemClass: ConfigurableMenus.ConfigurablePopupMenuSection,
+                SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
+            });*/
+            this.menuFactory = new ConfigurableMenus.MenuFactory(this, this.orientation, {
+                RootMenuClass: ConfigurableMenus.ConfigurableMenuApplet,
+                MenuItemClass: PopupMenu.PopupMenuItem,
+                //SubMenuMenuItemClass: ConfigurableMenus.ConfigurablePopupSubMenuMenuItem,
+                SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
+                MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
+                SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
+            });
+            this.menuFactory.connect("dropped", Lang.bind(this, this._on_menu_dropped));
+
+            let icon_size = this._get_icon_size();
+
+            this.indicatorDbus = new IndicatorAppMenuWatcher.IndicatorAppMenuWatcher(
+                   IndicatorAppMenuWatcher.AppmenuMode.MODE_STANDARD, icon_size);
             this.indicatorDbus.connect('on_appmenu_changed', Lang.bind(this, this._on_appmenu_changed));
         }
 	catch(e) {
@@ -44,52 +87,104 @@ MyApplet.prototype = {
 
     _on_appmenu_changed: function(indicator, window) {
       try {
-        if((this.menu) && (this.menu.isOpen))
-            this.menu.close();
-        this.menu = null;
-        if(this.icon_signal_id > 0)
-            this.actorIcon.disconnect(this.icon_signal_id);
-        if(this.label_signal_id > 0)
-            this.actorlabel.disconnect(this.label_signal_id);
-        this.icon_signal_id = 0;
-        this.label_signal_id = 0;
-        this.actor.destroy_all_children();
+        let newLabel = null;
+        let newIcon = null;
+        let newMenu = null;
         if(window) {
             let app = this.indicatorDbus.get_app_for_window(window);
             if(app) {
-                //Main.notify("app found" + app.get_name());
-                let icon = app.create_icon_texture(this._panelHeight);
-                this.actorlabel = new St.Label({ style_class: 'applet-label', reactive: true, track_hover: true, text: app.get_name() });
-                this.actorIcon = new St.BoxLayout({ style_class: 'applet-box', reactive: true, track_hover: true });
-                this.actorIcon.add(icon, { y_align: St.Align.MIDDLE, y_fill: false });
-                this.actor.add(this.actorIcon, { y_align: St.Align.MIDDLE, y_fill: false });
-                this.actor.add(this.actorlabel, { y_align: St.Align.MIDDLE, y_fill: false });
-                
-                this.menu = this.indicatorDbus.get_menu_for_window(window);
-                if(this.menu) {
-                    this.icon_signal_id = this.actorIcon.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
-                    this.label_signal_id = this.actorlabel.connect('button-press-event', Lang.bind(this, this._onIconButtonPressEvent));
-                    //this.actor.add(this.menu.actor, { y_align: St.Align.MIDDLE, y_fill: false });
-                } else {
-                    //Main.notify("menu not found " + app.get_name());
+                newIcon = this.indicatorDbus.get_icon_for_window(window);
+                newLabel = app.get_name();
+                let dbus_menu = this.indicatorDbus.get_menu_for_window(window);
+                if(dbus_menu) {
+                    newMenu = dbus_menu.get_shell_menu();
+                    if(!newMenu) {
+                        let menuManager = new PopupMenu.PopupMenuManager(this);
+                        newMenu = this.menuFactory.build_shell_menu(dbus_menu, menuManager);
+                    }
                 }
-            } else {
-                Main.notify("app not found");
             }
         }
+        this._try_to_show(newLabel, newIcon, newMenu);
+
       }catch(e){Main.notify("Errors", e.message);}
     },
 
-    on_applet_removed_from_panel: function() {
+    _on_menu_dropped: function(fact, menu) {
+       if(menu)
+          menu.destroy();
     },
 
-    _onIconButtonPressEvent: function(actor, event) {
+    _try_to_show: function(newLabel, newIcon, newMenu) {
+        if((newLabel != null)&&(newIcon != null)) {
+           this._change_appmenu(newLabel, newIcon, newMenu);
+        } else  {
+           this._clean_appmenu();
+        }
+        //Main.notify(" " + newLabel + " " + newIcon)        
+    },
+
+    _change_appmenu: function(newLabel, newIcon, newMenu) {
+        if(this._is_new_menu(newMenu)) {
+            this._close_menu();
+            this.menu = newMenu;
+            if((this.menu)&&(this.menu.default_displayed))
+                this.menu.open();
+        }
+        if(this._is_new_app(newLabel, newIcon)) {
+            this.actorLabel.set_text(newLabel);
+            this.actorIcon.set_child(newIcon);
+        }
+    },
+
+    _close_menu: function() {
+        if((this.menu)&&(this.menu.isOpen))
+            this.menu.close();
+    },
+
+    _clean_appmenu: function() {
+        this._close_menu();
+        this.menu = null;
+        this.actorIcon.set_child(null);
+        this.actorLabel.set_text("");
+    },
+
+    _is_new_app: function(newLabel, newIcon) {
+        return ((newIcon != this.actorIcon.get_child())||
+                (newLabel != this.actorLabel.get_text()));
+    },
+
+    _is_new_menu: function(newMenu) {
+        return (newMenu != this.menu);
+    },
+
+    _get_icon_size: function() {
+        let icon_size;
+        let ui_scale = global.ui_scale;
+        if(!ui_scale) ui_scale = 1;
+        if (this._scaleMode)
+            icon_size = this._panelHeight * Applet.COLOR_ICON_HEIGHT_FACTOR / ui_scale;
+        else
+            icon_size = Applet.FALLBACK_ICON_HEIGHT;
+        return icon_size;
+    },
+
+    on_panel_height_changed: function() {
+        let icon_size = this._get_icon_size();
+        this.indicatorDbus.set_icon_size(icon_size);
+    },
+
+    on_applet_removed_from_panel: function() {
+        this.indicatorDbus.destroy();
+    },
+
+    on_applet_clicked: function(event) {
         if((this._draggable)&&(!this._draggable.inhibit))
             return false;
         if((this.menu) && (event.get_button() == 1)) {
             this.menu.toggle();
         }
-        return false;
+        return false;       
     }
 };
 

@@ -10,6 +10,8 @@ Special thanks to:
 - Cinnamon devs        (https://github.com/linuxmint/Cinnamon)     Help providing support (specially: https://github.com/mtwebster).
 
 --------------
+![](https://raw.githubusercontent.com/lestcape/Global-AppMenu/master/globalAppMenu%40lestcape/Capture.png)
+
 Description
 --------------
 This extension integrates the Ubuntu AppMenu (Global Menu) support into Cinnamon Desktop.

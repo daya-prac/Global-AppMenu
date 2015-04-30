@@ -28,9 +28,6 @@ const Lang = imports.lang;
 const Params = imports.misc.params;
 const Signals = imports.signals;
 
-const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
-const Utility = AppletPath.utility;
-
 const OrnamentType = PopupMenu.Ornament ? PopupMenu.Ornament : {
     NONE: 0,
     CHECK: 1,
@@ -1629,15 +1626,15 @@ function RadioButton() {
 
 RadioButton.prototype = {
     _init: function(state) {
-        this.actor = new St.Bin({ style_class: 'radiobutton' });/*,
-                                  accessible_role: Atk.Role.CHECK_BOX });*/
+        this.actor = new St.Bin({ style_class: 'radiobutton' });
         //this.actor.set_style_class_name("check-box");
         this.setToggleState(state);
         this.actor.style = "background-image: url('radiobutton-off.svg');";
     },
 
     setToggleState: function(state) {
-        this.actor.change_style_pseudo_class('checked', state);
+        if(state) this.actor.add_style_pseudo_class('checked');
+        else this.actor.remove_style_pseudo_class('checked');
         this.state = state;
     },
 
@@ -1657,8 +1654,9 @@ function Switch() {
 
 Switch.prototype = {
     _init: function(state) {
-        this.actor = new St.Bin({ style_class: 'toggle-switch' ,
-                                  accessible_role: Atk.Role.CHECK_BOX});
+        this.actor = new St.Bin({ style_class: 'toggle-switch'});
+        if(this.actor.set_accessible_role)
+            this.actor.set_accessible_role(Atk.Role.CHECK_BOX);
         // Translators: this MUST be either "toggle-switch-us"
         // (for toggle switches containing the English words
         // "ON" and "OFF") or "toggle-switch-intl" (for toggle
@@ -1669,7 +1667,8 @@ Switch.prototype = {
     },
 
     setToggleState: function(state) {
-        this.actor.change_style_pseudo_class('checked', state);
+        if(state) this.actor.add_style_pseudo_class('checked');
+        else this.actor.remove_style_pseudo_class('checked');
         this.state = state;
     },
 
@@ -1745,7 +1744,8 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
    },
 
    _subMenuOpenStateChanged: function(menu, open) {
-      this.actor.change_style_pseudo_class('open', open);
+      if(state) this.actor.add_style_pseudo_class('open');
+      else this.actor.remove_style_pseudo_class('open');
       if((!this._hide_expander)&&(!this._floating)) {
          if(menu.isOpen) {
             let rotation_angle = 90;
@@ -1882,9 +1882,10 @@ ConfigurablePopupMenuItem.prototype = {
         this.actor = new St.BoxLayout({ style_class: 'popup-menu-item',
                                         reactive: params.reactive,
                                         track_hover: params.reactive,
-                                        can_focus: params.reactive,
-                                        accessible_role: Atk.Role.MENU_ITEM
+                                        can_focus: params.reactive
                                      });
+        if(this.actor.set_accessible_role)
+            this.actor.set_accessible_role(Atk.Role.MENU_ITEM);
         this.actor.connect('style-changed', Lang.bind(this, this._onStyleChanged));
         this.actor._delegate = this;
 

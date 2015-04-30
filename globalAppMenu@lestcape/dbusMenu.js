@@ -26,6 +26,7 @@ const Main = imports.ui.main;
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
 const Utility = AppletPath.utility;
+const ConfigurableMenus = AppletPath.configurableMenus;
 
 const BusClientProxy = Gio.DBusProxy.makeProxyWrapper(Utility.DBusMenu);
 const BusGtkClientProxy = Gio.DBusProxy.makeProxyWrapper(Utility.DBusGtkMenu);
@@ -39,7 +40,6 @@ const MandatedTypes = {
     'type'              : GLib.VariantType.new("s"),
     'children-display'  : GLib.VariantType.new("s"),
     'icon-name'         : GLib.VariantType.new("s"),
-    'gtk-icon-name'     : GLib.VariantType.new("s"),
     'icon-data'         : GLib.VariantType.new("ay"),
     'toggle-type'       : GLib.VariantType.new("s"),
     'toggle-state'      : GLib.VariantType.new("i"),
@@ -52,16 +52,9 @@ const DefaultValues = {
     'visible'    : GLib.Variant.new_boolean(true),
     'enabled'    : GLib.Variant.new_boolean(true),
     'label'      : GLib.Variant.new_string(""),
-    'type'       : GLib.Variant.new_string("standard"),
+    'type'       : GLib.Variant.new_string(""),
     'action'     : GLib.Variant.new_string(""),
     'accel'      : GLib.Variant.new_string("")
-    // elements not in here must return null
-};
-
-const EventTypes = {
-    'opened'    : "opened",
-    'closed'    : "closed",
-    'clicked'   : "clicked"
     // elements not in here must return null
 };
 
@@ -172,84 +165,88 @@ PropertyStore.prototype = {
 /**
  * Represents a single menu item
  */
-function DbusMenuItem(client, id, properties, children_ids) {
-    this._init(client, id, properties, children_ids);
+function DbusMenuItem(id, children_ids, properties, client) {
+    this._init(id, children_ids, properties, client);
 }
 
 DbusMenuItem.prototype = {
+    __proto__: ConfigurableMenus.PopupMenuAbstractFactory.prototype,
 
     // will steal the properties object
-    _init: function(client, id, properties, children_ids) {
+    _init: function(id, children_ids, properties, client) {
+        ConfigurableMenus.PopupMenuAbstractFactory.prototype._init.call(this, id, children_ids, this._createParameters(properties, client));
+    },
+
+    // FIXME We really don't need the PropertyStore object, and some private function
+    // could make a clean on our "unsave" variants.
+    _createParameters: function(properties, client) {
         this._client = client;
-        this._id = id;
-        this._propStore = new PropertyStore(properties);
-        this._children_ids = children_ids;
-        this._signals_handlers = [];
+        let propStore = new PropertyStore(properties);
+        let params = {};
+        if("label" in properties)
+            params.label = propStore.get_string("label").replace(/_([^_])/, "$1");
+        if("accel" in properties)
+            params.accel = this._getAccel(propStore.get_string("accel"));
+        if("enabled" in properties)
+            params.sensitive = propStore.get_bool("enabled");
+        if("visible" in properties)
+            params.visible = propStore.get_bool("visible");
+        if("toggle-type" in properties)
+            params.toggleType = propStore.get_string("toggle-type");
+        if("toggle-state" in properties)
+            params.toggleState = propStore.get_int("toggle-state");
+        if("icon-name" in properties)
+            params.iconName = propStore.get_string("icon-name");
+        if("icon-data" in properties)
+            params.iconData = this._getGdkIcon(propStore.get_variant("icon-data"));
+        if(("children-display" in properties)||("type" in properties))
+            params.type = this._getFactoryType(propStore.get_string('children-display'), propStore.get_string('type'))
+        if("action" in properties)
+            params.action = propStore.get_string("action").replace("unity.", "");
+        if("param-type" in properties)
+            params.paramType = propStore.get_variant("param-type");
+        return params;
     },
 
-    is_visible: function() {
-        return this._propStore.get_bool('visible');
+    updatePropertiesAsVariant: function(properties) {
+        let propStore = new PropertyStore(properties);
+        if("label" in properties)
+            this.setLabel(propStore.get_string("label").replace(/_([^_])/, "$1"));
+        if("accel" in properties)
+            this.setAccel(this._getAccel(propStore.get_string("accel")));
+        if("enabled" in properties)
+            this.setSensitive(propStore.get_bool("enabled"));
+        if("visible" in properties)
+            this.setVisible(propStore.get_bool("visible"));
+        if("toggle-type" in properties)
+            this.setToggleType(propStore.get_string("toggle-type"));
+        if("toggle-state" in properties)
+            this.setToggleState(propStore.get_int("toggle-state"));
+        if("icon-name" in properties)
+            this.setIconName(propStore.get_string("icon-name"));
+        if("icon-data" in properties)
+            this.setGdkIcon(this._getGdkIcon(propStore.get_variant("icon-data")));
+        if(("children-display" in properties)||("type" in properties))
+            this.setFactoryType(this._getFactoryType(propStore.get_string('children-display'), propStore.get_string('type')));
+        if("action" in properties)
+            this.setAction(propStore.get_string("action").replace("unity.", ""));
+        if("param-type" in properties)
+            this.setParamType(propStore.get_variant("param-type"));
     },
 
-    is_enabled: function() {
-        return this._propStore.get_bool('enabled');
+    getItemById: function(id) {
+        return this._client.get_item(id);
     },
 
-    get_label: function() {
-        let label = this._propStore.get_string('label');
-        return label.replace(/_([^_])/, "$1");
-    },
-
-    get_type: function() {
-        return this._propStore.get_string('type');
-    },
-
-    get_children_display: function() {
-        return this._propStore.get_string('children-display');
-    },
-
-    get_icon_name: function() {
-        return this._propStore.get_string('icon-name');
-    },
-
-    get_gdk_icon: function() {
-        try {
-            let iconData = this._propStore.get_variant("icon-data");
-            if (iconData) {
-                let data = iconData.get_data_as_bytes()
-                let stream = Gio.MemoryInputStream.new_from_bytes(data);
-                return GdkPixbuf.Pixbuf.new_from_stream(stream, null);
-            } else {
-                let icon_name = this._propStore.get_string("gtk-icon-name");
-                if (!icon_name)
-                    return null;
-                if(!IconTheme.has_icon(icon_name))
-                    return null;
-                let icon = IconTheme.load_icon(icon_name, 25,
-                           Gtk.IconLookupFlags.GENERIC_FALLBACK);
-                return icon;
-            }
-        } catch(e) {
-            global.log("Error loading icon.");
+    handleEvent: function(event, params) {
+        if(event in ConfigurableMenus.FactoryEventTypes) {
+            this._client.send_event(this._id, event, params, 0);
+            if(event == ConfigurableMenus.FactoryEventTypes.opened)
+                this._client.send_about_to_show(this._id);
         }
-        return null;
     },
 
-    get_toggle_type: function() {
-        return this._propStore.get_string('toggle-type');
-    },
-
-    get_toggle_state: function() {
-        return this._propStore.get_int('toggle-state');
-    },
-
-    get_action: function() {
-        let action = this._propStore.get_string('action');
-        return action.replace("unity.", "");
-    },
-
-    get_accel: function() {
-        let accel_name = this._propStore.get_string('accel');
+    _getAccel: function(accel_name) {
         if (accel_name) {
             [key, mods] = Gtk.accelerator_parse(accel_name);
             return Gtk.accelerator_get_label(key, mods);
@@ -257,98 +254,43 @@ DbusMenuItem.prototype = {
         return null;
     },
 
-    get_children: function() {
-        return this._children_ids.map(function(el) {
-            return this._client.get_item(el);
-        }, this);
-    },
-
-    get_id: function() {
-        return this._id;
-    },
-
-    get_children_ids: function() {
-        return this._children_ids.concat(); // clone it!
-    },
-
-    get_variant_property: function(name) {
-       return this._propStore.get_variant(name);
-    },
-
-    set_variant_property: function(name, value) {
-       if(this._propStore.set_variant(name, value)) {
-           this.emit('property-changed', name, this.get_variant_property(name));
-       }
-    },
-
-    handle_event: function(event, value, timestamp) {
-        if(event in EventTypes) {
-            if (!timestamp)
-                timestamp = 0;
-            this._client.send_event(this._id, event, value, timestamp);
-            if(event == EventTypes.opened)
-                this._send_about_to_show();
+    _getFactoryType: function(child_display, child_type) {
+        if((child_display) || (child_type)) {
+            if ((child_display == "rootmenu")||(this._id == this._client.get_root_id()))
+                return ConfigurableMenus.FactoryClassTypes.RootMenuClass;
+            if (child_display == "submenu")
+                return ConfigurableMenus.FactoryClassTypes.SubMenuMenuItemClass;
+            else if (child_display == "section")
+                return ConfigurableMenus.FactoryClassTypes.MenuSectionMenuItemClass;
+            else if (child_type == "separator")
+                return ConfigurableMenus.FactoryClassTypes.SeparatorMenuItemClass;
+            /*else if (this._client.get_root() == this)
+                return ConfigurableMenus.FactoryClassTypes.SeparatorMenuItemClass;*/
+            return ConfigurableMenus.FactoryClassTypes.MenuItemClass;
         }
+        return null;
     },
 
-    add_child: function(pos, child_id) {
-        this._children_ids.splice(pos, 0, child_id);
-        this.emit('child-added', this._client.get_item(child_id), pos);
-    },
-
-    remove_child: function(child_id) {
-        // find it
-        let pos = -1;
-        for (let i = 0; i < this._children_ids.length; ++i) {
-            if (this._children_ids[i] == child_id) {
-                pos = i;
-                break;
+    _getGdkIcon: function(value) {
+        try {
+            if (value) {
+                let data = value.get_data_as_bytes()
+                let stream = Gio.MemoryInputStream.new_from_bytes(data);
+                return GdkPixbuf.Pixbuf.new_from_stream(stream, null);
             }
+        } catch(e) {
+            global.log("Error loading icon.");
         }
-
-        if (pos < 0) {
-            global.logError("Trying to remove child which doesn't exist");
-        } else {
-            this._children_ids.splice(pos, 1);
-            this.emit('child-removed', this._client.get_item(child_id));
-        }
-    },
-
-    move_child: function(child_id, newpos) {
-        // find the old position
-        let oldpos = -1;
-        for (let i = 0; i < this._children_ids.length; ++i) {
-            if (this._children_ids[i] == child_id) {
-                oldpos = i;
-                break;
-            }
-        }
-
-        if (oldpos < 0) {
-            global.logError("tried to move child which wasn't in the list");
-            return;
-        }
-
-        if (oldpos != newpos) {
-            this._children_ids.splice(oldpos, 1);
-            this._children_ids.splice(newpos, 0, child_id);
-            this.emit('child-moved', oldpos, newpos, this._client.get_item(child_id));
-        }
-    },
-
-    _send_about_to_show: function() {
-        this._client.send_about_to_show(this._id);
+        return null;
     },
 
     destroy: function() {
-        /*if(this._proxy_menu)
-            Signals._disconnectAll.apply(this._proxy_menu);
-        this._proxy_menu = null;
-        this.emit('destroy');*/
-        //Main.notify("destroy");
+        if(this._client) {
+            ConfigurableMenus.PopupMenuAbstractFactory.prototype.destroy.call(this);
+            this._client = null;
+        }
     }
 };
-Signals.addSignalMethods(DbusMenuItem.prototype);
 
 /**
  * The client does the heavy lifting of actually reading layouts and distributing events
@@ -369,13 +311,13 @@ DBusClient.prototype = {
         this._flagLayoutUpdateRequired = false;
         this._flagLayoutUpdateInProgress = false;
         // Property requests are queued
-        this._propertiesRequestedFor = [ /* ids */ ];
+        this._propertiesRequestedFor = []; // ids
 
-        let init_id = this._get_init_id();
+        let init_id = this.get_root_id();
 
         this._items = {};
-        this._items[init_id] = new DbusMenuItem(this, init_id,
-            { 'children-display': GLib.Variant.new_string('submenu') }, []);
+        this._items[init_id] = new DbusMenuItem(init_id, [],
+            { 'children-display': GLib.Variant.new_string('rootmenu'), 'visible': GLib.Variant.new_boolean(false) }, this);
 
         this._proxy_menu = this._start_main_proxy();
     },
@@ -389,10 +331,12 @@ DBusClient.prototype = {
     },
 
     get_root: function() {
-        return this._items[this._get_init_id()];
+        if (this._items)
+            return this._items[this.get_root_id()];
+        return null;
     },
 
-    _get_init_id: function() {
+    get_root_id: function() {
         return 0;
     },
 
@@ -433,37 +377,33 @@ DBusClient.prototype = {
     _endRequestProperties: function(result, error) {
         if (error) {
             global.logWarning("Could not retrieve properties: "+error);
-            return;
+        } else if (this._items) {
+            // for some funny reason, the result array is hidden in an array
+            result[0].forEach(function([id, properties]) {
+                if (!(id in this._items))
+                    return;
+
+                this._items[id].updatePropertiesAsVariant(properties);
+            }, this);
         }
-
-        // for some funny reason, the result array is hidden in an array
-        result[0].forEach(function([id, properties]) {
-            if (!(id in this._items))
-                return;
-
-            for (let prop in properties)
-                this._items[id].set_variant_property(prop, properties[prop]);
-        }, this);
     },
 
     // Traverses the list of cached menu items and removes everyone that is not in the list
     // so we don't keep alive unused items
     _gcItems: function() {
-        let tag = new Date().getTime();
+        if (this._items) {
+            let tag = new Date().getTime();
 
-        let toTraverse = [ this._get_init_id() ];
-        while (toTraverse.length > 0) {
-            let item = this.get_item(toTraverse.shift());
-            item._dbusClientGcTag = tag;
-            Array.prototype.push.apply(toTraverse, item.get_children_ids());
-        }
+            let toTraverse = [ this.get_root_id() ];
+            while (toTraverse.length > 0) {
+                let item = this.get_item(toTraverse.shift());
+                item._dbusClientGcTag = tag;
+                Array.prototype.push.apply(toTraverse, item.getChildrenIds());
+            }
 
-        for (let i in this._items)
-            if (this._items[i]._dbusClientGcTag != tag)
-                delete this._items[i];
-
-        if(Object.keys(this._items).length == 1) {
-            this.get_root().emit("dropped");
+            for (let id in this._items)
+                if (this._items[id]._dbusClientGcTag != tag)
+                    delete this._items[id];
         }
     },
 
@@ -499,49 +439,49 @@ DBusClient.prototype = {
 
     _doLayoutUpdate: function(item) {
         let [ id, properties, children ] = item;
+        if(this._items) {
+            let children_unpacked = children.map(function(child) { return child.deep_unpack(); });
+            let children_ids = children_unpacked.map(function(child) { return child[0]; });
 
-        let children_unpacked = children.map(function(child) { return child.deep_unpack(); });
-        let children_ids = children_unpacked.map(function(child) { return child[0]; });
+            // make sure all our children exist
+            children_unpacked.forEach(this._doLayoutUpdate, this);
 
-        // make sure all our children exist
-        children_unpacked.forEach(this._doLayoutUpdate, this);
+            // make sure we exist
+            if (id in this._items) {
+                // we do, update our properties if necessary
+                this._items[id].updatePropertiesAsVariant(properties);
 
-        // make sure we exist
-        if (id in this._items) {
-            // we do, update our properties if necessary
-            for (let prop in properties) {
-                this._items[id].set_variant_property(prop, properties[prop]);
-            }
+                // make sure our children are all at the right place, and exist
+                let old_children_ids = this._items[id].getChildrenIds();
+                for (let i = 0; i < children_ids.length; ++i) {
+                    // try to recycle an old child
+                    let old_child = -1;
+                    for (let j = 0; j < old_children_ids.length; ++j) {
+                        if (old_children_ids[j] == children_ids[i]) {
+                            old_child = old_children_ids.splice(j, 1)[0];
+                            break;
+                        }
+                    }
 
-            // make sure our children are all at the right place, and exist
-            let old_children_ids = this._items[id].get_children_ids();
-            for (let i = 0; i < children_ids.length; ++i) {
-                // try to recycle an old child
-                let old_child = -1;
-                for (let j = 0; j < old_children_ids.length; ++j) {
-                    if (old_children_ids[j] == children_ids[i]) {
-                        old_child = old_children_ids.splice(j, 1)[0];
-                        break;
+                    if (old_child < 0) {
+                        // no old child found, so create a new one!
+                        this._items[id].addChild(i, children_ids[i]);
+                    } else {
+                        // old child found, reuse it!
+                        this._items[id].moveChild(children_ids[i], i);
                     }
                 }
 
-                if (old_child < 0) {
-                    // no old child found, so create a new one!
-                    this._items[id].add_child(i, children_ids[i]);
-                } else {
-                    // old child found, reuse it!
-                    this._items[id].move_child(children_ids[i], i);
-                }
+                // remove any old children that weren't reused
+                old_children_ids.forEach(function(child_id) {
+                    this._items[id].removeChild(child_id); 
+                }, this);
+            } else {
+                // we don't, so let's create us
+                this._items[id] = new DbusMenuItem(id, children_ids, properties, this);
+                this._requestProperties(id);
             }
-
-            // remove any old children that weren't reused
-            old_children_ids.forEach(function(child_id) { this._items[id].remove_child(child_id); }, this);
-        } else {
-            // we don't, so let's create us
-            this._items[id] = new DbusMenuItem(this, id, properties, children_ids);
-            this._requestProperties(id);
         }
-
         return id;
     },
 
@@ -561,7 +501,7 @@ DBusClient.prototype = {
     },
 
     get_item: function(id) {
-        if (id in this._items)
+        if ((this._items)&&(id in this._items))
             return this._items[id];
 
         global.logWarning("trying to retrieve item for non-existing id "+id+" !?");
@@ -595,7 +535,7 @@ DBusClient.prototype = {
                     let children_ids = children_unpacked.map(function(child) { return child[0]; });
                     children_ids.forEach(function(child_id) {
                         this._proxy_menu.AboutToShowRemote(child_id, 
-                            Lang.bind(this, function(result, error){/* we don't care */}));
+                            Lang.bind(this, function(result, error){})); // we don't care
                     }, this);
                 })
             );
@@ -607,14 +547,14 @@ DBusClient.prototype = {
             if (!params)
                 params = GLib.Variant.new_int32(0);
             this._proxy_menu.EventRemote(id, event, params, timestamp, 
-                function(result, error) { /* we don't care */ });
+                function(result, error) {}); // we don't care
         }
     },
 
     _onLayoutUpdated: function(proxy, sender, items) {
-        /*if(items[1] == 0)
-            this._fake_send_about_to_show();
-        else*/
+        //if(items[1] == 0)
+        //    this._fake_send_about_to_show();
+        //else
         if(this._idLayoutUpdate == 0) {
             this._idLayoutUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE,
                 Lang.bind(this, this._requestLayoutUpdate));
@@ -622,31 +562,36 @@ DBusClient.prototype = {
     },
 
     _onPropertiesUpdated: function(proxy, name, [changed, removed]) {
-        changed.forEach(function([id, props]) {
-            if (!(id in this._items))
-                return;
+        if (this._items) {
+            changed.forEach(function([id, properties]) {
+                if (!(id in this._items))
+                    return;
 
-            for (let prop in props)
-                this._items[id].set_variant_property(prop, props[prop]);
-        }, this);
-        removed.forEach(function([id, propNames]) {
-            if (!(id in this._items))
-                return;
-
-            propNames.forEach(function(propName) {
-                this._items[id].set_variant_property(propName, null);
+                this._items[id].updatePropertiesAsVariant(properties);
             }, this);
-        }, this);
+            removed.forEach(function([id, propNames]) {
+                if (!(id in this._items))
+                    return;
+
+                let properties = {};            
+                propNames.forEach(function(propName) {
+                    properties[propName] = null;
+                }, this);
+                this._items[id].updatePropertiesAsVariant(properties);
+            }, this);
+        }
     },
 
     destroy: function() {
-        if(this._proxy_menu)
+        if(this._proxy_menu) {
             Signals._disconnectAll.apply(this._proxy_menu);
-        this._proxy_menu = null;
-        this.emit('destroy');
+            this._proxy_menu = null;
+            let root = this.get_root();
+            root.destroy();
+            this._items = null;
+        }
     }
 };
-Signals.addSignalMethods(DBusClient.prototype);
 
 function DBusClientGtk(busName, busPath) {
     this._init(busName, busPath);
@@ -662,7 +607,7 @@ DBusClientGtk.prototype = {
         this.gtk_menubar_menus = null;
     },
 
-    _get_init_id: function() {
+    get_root_id: function() {
         return "02"; //FIXME will start always on 02?
     },
 
@@ -698,18 +643,18 @@ DBusClientGtk.prototype = {
                     return;
 
                 let properties = properties_hash[action_id];
-                this._items[id].set_variant_property("enabled", GLib.Variant.new_boolean(properties[0]));
+                this._items[id].setSensitive(properties[0]);
                 if(properties[1])
-                    this._items[id].set_variant_property("param-type", GLib.Variant.new("g", properties[1]));
+                    this._items[id].setParamType(GLib.Variant.new("g", properties[1]));
                 else
-                    this._items[id].set_variant_property("param-type", GLib.Variant.new("g", ""));
+                    this._items[id].setParamType(GLib.Variant.new("g", ""));
 
                 if((properties[2])&&(properties[2].length > 0)) {
-                    this._items[id].set_variant_property("toggle-type", GLib.Variant.new_string('checkmark'));
+                    this._items[id].setToggleType('checkmark');
                     let value = properties[2][0].deep_unpack();
-                    this._items[id].set_variant_property("toggle-state", GLib.Variant.new_int32(value ? 1 : 0));
-                } else if (this._items[id].get_toggle_state()) {
-                    this._items[id].set_variant_property("toggle-state", GLib.Variant.new_int32(0));
+                    this._items[id].setToggleState((value ? 1 : 0));
+                } else if (this._items[id].getToggleState()) {
+                    this._items[id].setToggleState(0);
                 }
             }
         }
@@ -719,12 +664,17 @@ DBusClientGtk.prototype = {
         this.actions_ids = {};//FIXME add and remove better?
         let theme = Gtk.IconTheme.get_default();
         for(let id in this._items) {
-            let action_id = this._items[id].get_action();
+            let action_id = this._items[id].getAction();
             if(action_id) {
                 this.actions_ids[action_id] = id;
                 try {
-                    if(IconTheme.has_icon(action_id.toLowerCase())) {
-                        this._items[id].set_variant_property("gtk-icon-name", GLib.Variant.new_string(action_id.toLowerCase()));
+                    // FIXME we need to find a better way to get more standar gtk icons
+                    // using the gtk-action-id.
+                    let gtk_icon_name = action_id.toLowerCase();
+                    if(IconTheme.has_icon(gtk_icon_name)) {
+                        let icon = IconTheme.load_icon(gtk_icon_name, 25,
+                                       Gtk.IconLookupFlags.GENERIC_FALLBACK);
+                        this._items[id].setGdkIcon(icon);
                     }
                 } catch(e) {
                    global.logWarning("While reading actions ids: " + error);
@@ -742,19 +692,24 @@ DBusClientGtk.prototype = {
             this._beginLayoutUpdate();
     },
 
-    // the original implementation will only request partial layouts if somehow possible
-    // we try to save us from multiple kinds of race conditions by always requesting a full layout
+    // FIXME Call End over the Cinnamon restart, will crash some Gtk applications.
+    // This is because we need to call End the same number of times that we call Start,
+    // and this can not be a waranty is Cinnamon destroy the object on the middle of
+    // the process. So, we can call End when we call Start, but possible we not recive
+    // some changes on the menu structure during the life of the Gtk applications or a
+    // Cinnamon restart, but we don't like a glib-gio error with a corresponding core dump
+    // for the Gtk applications.
+    // GLib-GIO:ERROR: g_menu_exporter_group_unsubscribe: assertion failed:
+    // (group->subscribed >= count)
     _beginLayoutUpdate: function() {
-        // we only read the type property, because if the type changes after reading all properties,
-        // the view would have to replace the item completely which we try to avoid
-
         this._flagLayoutUpdateRequired = false;
         if(this._proxy_menu) {
             this._flagLayoutUpdateInProgress = true;
             let init_menu = [];
-            for (let x = 0; x < 1024; x++) { init_menu.push(x); }
-
+            for (let x = 0; x < 1024; x++)
+                init_menu.push(x);
             this._proxy_menu.StartRemote(init_menu, Lang.bind(this, this._endLayoutUpdate));
+            this._proxy_menu.EndRemote(init_menu, Lang.bind(this, function(result, error) {})); // Nothing to do
         }
     },
 
@@ -766,13 +721,13 @@ DBusClientGtk.prototype = {
 
         //Now unpack the menu and create a fake root item?
         if((result) && (result[0])) {
-            let init_id = this._get_init_id();
+            let init_id = this.get_root_id();
             this.gtk_menubar_menus = {};
             this.gtk_menubar_menus[init_id] = [];
             result[0].forEach(function([menu_pos, section_pos, section_items]) {
                 this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
             }, this);
-            this._doLayoutUpdate(init_id, { "children-display": GLib.Variant.new_string("submenu") } );
+            this._doLayoutUpdate(init_id, { "children-display": GLib.Variant.new_string("rootmenu"), 'visible': GLib.Variant.new_boolean(false) } );
         }
 
         this._gcItems();
@@ -807,7 +762,10 @@ DBusClientGtk.prototype = {
                         menu_section["children-display"] = GLib.Variant.new_string("submenu");
                         this._doLayoutUpdate(id_sub, menu_section);
                     } else {
-                        id_sub = "" + id + "" + pos;
+                        // FIXME We used here the label of the item to identify an item,
+                        // but could be found a better id to handle this, the position
+                        // is not a good one.
+                        id_sub = "" + id + "" + menu_section["label"].unpack();//+ pos;
                         children_ids.push(id_sub);
                         this._doLayoutUpdate(id_sub, menu_section);
                     }
@@ -816,12 +774,10 @@ DBusClientGtk.prototype = {
 
             if (id in this._items) {
                 // we do, update our properties if necessary
-                for (let prop in properties) {
-                    this._items[id].set_variant_property(prop, properties[prop]);
-                }
+                this._items[id].updatePropertiesAsVariant(properties);
 
                 // make sure our children are all at the right place, and exist
-                let old_children_ids = this._items[id].get_children_ids();
+                let old_children_ids = this._items[id].getChildrenIds();
                 for (let i = 0; i < children_ids.length; ++i) {
                     // try to recycle an old child
                     let old_child = -1;
@@ -834,20 +790,20 @@ DBusClientGtk.prototype = {
 
                     if (old_child < 0) {
                         // no old child found, so create a new one!
-                        this._items[id].add_child(i, children_ids[i]);
+                        this._items[id].addChild(i, children_ids[i]);
                     } else {
                         // old child found, reuse it!
-                        this._items[id].move_child(children_ids[i], i);
+                        this._items[id].moveChild(children_ids[i], i);
                     }
                 }
 
                 // remove any old children that weren't reused
                 old_children_ids.forEach(function(child_id) { 
-                    this._items[id].remove_child(child_id); 
+                    this._items[id].removeChild(child_id); 
                 }, this);
             } else {
                 // we don't, so let's create us
-                this._items[id] = new DbusMenuItem(this, id, properties, children_ids);
+                this._items[id] = new DbusMenuItem(id, children_ids, properties, this);
                 //this._requestProperties(id);
             }
         } catch (e) {
@@ -860,15 +816,15 @@ DBusClientGtk.prototype = {
     },
 
     send_event: function(id, event, params, timestamp) {//FIXME no match signal id
-        let action_id = this._items[id].get_action();
+        let action_id = this._items[id].getAction();
         if((action_id)&&(this._proxy_action)) {
             let plataform = {};
             if(!params)
-                params = this._items[id].get_variant_property("param-type");
+                params = this._items[id].getParamType();
             if(!params) 
                 params = GLib.Variant.new("av", []);
             this._proxy_action.ActivateRemote(action_id, params, plataform,
-                function(result, error) { /* we don't care */ });
+                function(result, error) {}); // we don't care
         }
     },
 
@@ -913,15 +869,13 @@ DBusClientGtk.prototype = {
     },
 
     destroy: function() {
-        if(this._proxy_action)
-            Signals._disconnectAll.apply(this._proxy_action);
-        this._proxy_action = null;
         if(this._proxy_menu) {
-            let init_menu = [];
-            for (let x = 0; x < 1024; x++) { init_menu.push(x); }
-            this._proxy_menu.EndRemote(init_menu,
-                Lang.bind(this, function(result, error) {/*Nothing to do*/ }));
+            DBusClient.prototype.destroy.call(this);
+            this._proxy_menu = null;
         }
-        DBusClient.prototype.destroy.call(this);
+        if(this._proxy_action) {
+            Signals._disconnectAll.apply(this._proxy_action);
+            this._proxy_action = null;
+        }
     }
 };

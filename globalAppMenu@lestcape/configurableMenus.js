@@ -37,8 +37,28 @@ const OrnamentType = PopupMenu.Ornament ? PopupMenu.Ornament : {
     DOT: 2
 };
 
-function ConfigurablePointer(arrowSide, binProperties) {
-   this._init(arrowSide, binProperties);
+const FactoryClassTypes = {
+    'RootMenuClass'            : "RootMenuClass",
+    'MenuItemClass'            : "MenuItemClass",
+    'SubMenuMenuItemClass'     : "SubMenuMenuItemClass",
+    'MenuSectionMenuItemClass' : "MenuSectionMenuItemClass",
+    'SeparatorMenuItemClass'   : "SeparatorMenuItemClass"
+};
+
+const FactoryEventTypes = {
+    'opened'    : "opened",
+    'closed'    : "closed",
+    'clicked'   : "clicked"
+};
+
+/**
+ * ConfigurablePointer
+ *
+ * The low level class of the floating menu API.
+ * The child of the Cinnamon BoxPointer class.
+ */
+function ConfigurablePointer() {
+    this._init.apply(this, arguments);
 }
 
 ConfigurablePointer.prototype = {
@@ -107,10 +127,10 @@ ConfigurablePointer.prototype = {
       // We need to show it now to force an allocation,
       // so that we can query the correct size.
       //this.actor.show();
+      this._sourceActor = sourceActor;
+      this._arrowAlignment = alignment;
       if(this.actor.visible) {
-         this._sourceActor = sourceActor;
-         this._arrowAlignment = alignment;
-         this._reposition(sourceActor, alignment);
+         this._reposition(this._sourceActor, this._arrowAlignment);
       }
    },
 
@@ -555,84 +575,231 @@ try {
    }
 };
 
-function ConfigurableMenu(launcher, arrowAlignment, orientation, subMenu) {
-   this._init(launcher, arrowAlignment, orientation, subMenu);
+/**
+ * ConfigurableMenu
+ *
+ * The class that allow a lot of things on the menu API.
+ */
+function ConfigurableMenu() {
+    this._init.apply(this, arguments);
 }
 
 ConfigurableMenu.prototype = {
+    // Compatibility reasons
     //__proto__: PopupMenu.PopupMenuBase.prototype,
-    __proto__: PopupMenu.PopupMenu.prototype, // compatibility reasons
+    //__proto__: PopupMenu.PopupSubMenu.prototype,
+    __proto__: PopupMenu.PopupMenu.prototype, 
 
-   _init: function(launcher, arrowAlignment, orientation, subMenu) {
+
+   _init: function(launcher, arrowAlignment, orientation, menuManager, subMenu, floating) {
       PopupMenu.PopupMenuBase.prototype._init.call (this, (launcher ? launcher.actor: null), 'popup-menu-content');
       try {
          this._arrowAlignment = arrowAlignment;
          this._arrowSide = orientation;
+         this._menuManager = menuManager;
          this.subMenu = subMenu;
+
          this.effectType = "none";
          this.effectTime = 0.4;
          this._automatic_open_control = true;
          this._paint_id = 0;
          this._paint_count = 0;
-         this.old_parent = null;
+         this._reactive = true;
+         this._floating = false;
 
          this.launcher = null;
          this.orientation_id = 0;
-         this.set_launcher(launcher);
+         this._openedSubMenu = null;
+
+         // Since a function of a submenu might be to provide a "More.." expander
+         // with long content, we make it scrollable - the scrollbar will only take
+         // effect if a CSS max-height is set on the top menu.
+         this._scroll = new St.ScrollView({ style_class: 'popup-menu',//popup-sub-menu
+                                         hscrollbar_policy: Gtk.PolicyType.NEVER,
+                                         vscrollbar_policy: Gtk.PolicyType.NEVER });
+         this._scroll.clip_to_allocation = true;
+         this._scroll._delegate = this;
+
+         // StScrollbar plays dirty tricks with events, calling
+         // clutter_set_motion_events_enabled (FALSE) during the scroll; this
+         // confuses our event tracking, so we just turn it off during the
+         // scroll.
+         let vscroll = this._scroll.get_vscroll_bar();
+         vscroll.connect('scroll-start',
+                        Lang.bind(this, function() {
+                                      let topMenu = this._getTopMenu();
+                                      if (topMenu)
+                                          topMenu.passEvents = true;
+                                  }));
+         vscroll.connect('scroll-stop',
+                        Lang.bind(this, function() {
+                                      let topMenu = this._getTopMenu();
+                                      if (topMenu)
+                                          topMenu.passEvents = false;
+                                  }));
 
          this._boxPointer = new ConfigurablePointer(orientation,
                                                     { x_fill: true,
                                                       y_fill: true,
                                                       x_align: St.Align.START });
-         this.actor = this._boxPointer.actor;
-
-         this.actor._delegate = this;
-         this.actor.style_class = 'popup-menu-boxpointer';
-         this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
+         this._boxPointer.actor._delegate = this;
+         this._boxPointer.actor.set_style_class_name('popup-menu-boxpointer');
+         this._boxPointer.actor.add_style_class_name('popup-menu');
+         this._boxPointer.actor.hide();
+         Main.uiGroup.add_actor(this._boxPointer.actor);
+         this.fixedPointer = this._boxPointer.actor.connect('parent-set', Lang.bind(this, this._onParentChanged));
 
          this._boxWrapper = new Cinnamon.GenericContainer();
          this._boxWrapper.connect('get-preferred-width', Lang.bind(this, this._boxGetPreferredWidth));
          this._boxWrapper.connect('get-preferred-height', Lang.bind(this, this._boxGetPreferredHeight));
          this._boxWrapper.connect('allocate', Lang.bind(this, this._boxAllocate));
          this._boxPointer.bin.set_child(this._boxWrapper);
-         this._boxWrapper.add_actor(this.box);
+         this._scroll.add_actor(this.box);
+
+         this.actor = this._scroll;
+         this.setFloatingState(floating == true);
+
+         this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
+
          this.actor.add_style_class_name('popup-menu');
 
          global.focus_manager.add_group(this.actor);
-         this.actor.reactive = true;
-         this.actor.hide();
+         this.actor.reactive = false;
+         this.actor.hide();//.contains
+         if(launcher) {
+            if(!this._menuManager)
+               this._menuManager = new PopupMenu.PopupMenuManager(launcher);
+            this.setLauncher(launcher);
+         }
       } catch(e) {
          Main.notify("ErrorMenuCreation", e.message);
       }
    },
 
-   set_launcher: function(launcher) {
-      if(this.launcher != launcher) {
-         if(this.orientation_id > 0) {
-            if (this.launcher.actor instanceof Applet.Applet)
-               this.launcher.disconnect(this.orientation_id);
-            else if (this.launcher._applet)
-               this.launcher._applet.disconnect(this.orientation_id);
-            this.orientation_id = 0;
+   addMenuItem: function(menuItem, position) {
+      if ((this._floating)&&(menuItem instanceof PopupMenu.PopupSubMenuMenuItem)) {
+         let before_item = null;
+         if (position == undefined) {
+            this.box.add(menuItem.actor);
+         } else {
+            let items = this._getMenuItems();
+            if (position < items.length) {
+               before_item = items[position].actor;
+               this.box.insert_before(menuItem.actor, before_item);
+            } else
+               this.box.add(menuItem.actor);
          }
+         this._connectSubMenuSignals(menuItem, menuItem.menu);
+         this._connectItemSignals(menuItem);
+         menuItem._closingId = this.connect('open-state-changed', function(self, open) {
+            if (!open)
+               menuItem.menu.close(false);
+         });
+         this.length++;
+      } else
+         PopupMenu.PopupMenu.prototype.addMenuItem.call(this, menuItem, position);
+   },
+
+   _onParentChanged: function(actor, oldActor, event) {
+      let parent = this._boxPointer.actor.get_parent();
+      if((parent)&&(parent != Main.uiGroup)) {
+         parent.remove_actor(this._boxPointer.actor);
+      }
+      if(parent != Main.uiGroup)
+         Main.uiGroup.add_actor(this._boxPointer.actor);
+   },
+
+   setMenuReactive: function(reactive) {
+      this._reactive = reactive;
+   },
+
+   setFloatingState: function(floating, launcher) {
+      if(this.isOpen)
+         this.closeClean();
+      if(this._floating != floating) {
+         this._floating = floating;
+         this._releaseActorState();
+         if(this._floating) {
+            this._boxPointer.hide(false);
+            this._boxPointer.actor.hide();
+            this._scroll.hide();
+            this._scroll.set_style_class_name('popup-menu');
+            this._boxWrapper.add_actor(this._scroll);
+            this.actor = this._boxPointer.actor;
+            this.actor.set_style_class_name('popup-menu-boxpointer');
+            this.actor.add_style_class_name('popup-menu');
+            this._scroll.show();
+         } else {
+            this._boxPointer.hide(false);
+            this._boxPointer.actor.hide();
+            this._scroll.hide();
+            this._scroll.set_style_class_name('popup-sub-menu'); 
+            this.actor = this._scroll;
+         }
+      }
+      if(launcher)
+         this.setLauncher(launcher);
+   },
+
+   setLauncher: function(launcher) {
+      if(this.isOpen)
+         this.closeClean();
+      if(this.launcher != launcher) {
+         if(this.launcher) {
+            if(this.orientation_id > 0) {
+               if (this.launcher.actor instanceof Applet.Applet)
+                  this.launcher.disconnect(this.orientation_id);
+               else if (this.launcher._applet)
+                  this.launcher._applet.disconnect(this.orientation_id);
+               this.orientation_id = 0;
+            }
+         }
+         if(this._menuManager) {
+            let position = this._menuManager._findMenu(this);
+            if(position != -1)
+               this._menuManager.removeMenu(this);
+         }
+         
          this.launcher = launcher;
          if(this.launcher) {
             this.sourceActor = this.launcher.actor;
-            if (this.launcher.actor instanceof Applet.Applet)
-               this.orientation_id = this.launcher.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
-            else if (this.launcher._applet)
-               this.orientation_id = this.launcher._applet.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+            if(this._floating) {
+               if(this.sourceActor)
+                  this._boxPointer.trySetPosition(this.sourceActor, this._arrowAlignment);
+               if (this.launcher.actor instanceof Applet.Applet)
+                  this.orientation_id = this.launcher.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+               else if (this.launcher._applet)
+                  this.orientation_id = this.launcher._applet.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+               if(this._menuManager) {
+                  this._menuManager.owner = this.launcher;
+                  this._menuManager.addMenu(this);
+               }
+            } else {
+               let box = null;
+               if(this.launcher.box)
+                  box = this.launcher.box;
+               else
+                  box = this.launcher.actor.get_parent();
+               if(box) {
+                  let parent = this.actor.get_parent();
+                  if(parent)
+                     parent.remove_actor(this.actor);
+                  if((box != this.launcher.box)&&(box.insert_before)) {
+                     box.insert_before(this.actor, this.launcher.actor);
+                  } else if (box.add) {
+                     this._scroll.set_style_class_name('popup-menu');
+                     box.add(this.actor);
+                  } else if(box.addActor) {
+                     this._scroll.set_style_class_name('popup-menu');
+                     box.addActor(this.actor);
+                  }
+               }
+            }
          }
       }
    },
 
-   set_parent_menu: function(parent) {
-      if(this.parentMenu != parent) { 
-         this.parentMenu = parent;
-      }
-   },
-
-   set_automatic_open_control: function(active) {
+   setAutomaticOpenControl: function(active) {
       if(this._automatic_open_control != active) {
           this._automatic_open_control = active;
           if(!this._automatic_open_control) {
@@ -645,6 +812,10 @@ ConfigurableMenu.prototype = {
       }
    },
 
+   isInPosition: function(actor) {
+      return actor == this._boxPointer._sourceActor;
+   },
+   
    _onOrientationChanged: function(a, orientation) {
        this.setArrowSide(orientation);
    },
@@ -681,21 +852,25 @@ ConfigurableMenu.prototype = {
       let columnWidths = this.getColumnWidths();
       this.setColumnWidths(columnWidths);
       // Now they will request the right sizes
-      [alloc.min_size, alloc.natural_size] = this.box.get_preferred_width(forHeight);
+      [alloc.min_size, alloc.natural_size] = this._scroll.get_preferred_width(forHeight);
    },
 
    _boxGetPreferredHeight: function (actor, forWidth, alloc) {
-      [alloc.min_size, alloc.natural_size] = this.box.get_preferred_height(forWidth);
+      [alloc.min_size, alloc.natural_size] = this._scroll.get_preferred_height(forWidth);
    },
 
    _boxAllocate: function (actor, box, flags) {
-      this.box.allocate(box, flags);
+      this._scroll.allocate(box, flags);
    },
 
    _onKeyPressEvent: function(actor, event) {
-      if(event.get_key_symbol() == Clutter.Escape) {
-         this.close(true);
-         return true;
+      if(this.isOpen) {
+         if((event.get_key_symbol() == Clutter.Escape)||(event.get_key_symbol() == Clutter.KEY_Left)) {
+            this.close(true);
+            if((this.sourceActor)&&(this.sourceActor._delegate)&&(this.sourceActor._delegate.setActive))
+               this.sourceActor._delegate.setActive(true);
+            return true;
+         }
       }
       return false;
    },
@@ -731,8 +906,10 @@ ConfigurableMenu.prototype = {
          for(let j in panels) {
             maxHeight -= panels[j].actor.height;
          }
-
-         this.actor.style = ('max-height: ' + maxHeight / global.ui_scale + 'px;');
+         let scale = 1;
+         if(global.ui_scale)
+            scale = global.ui_scale;
+         this.actor.style = ('max-height: ' + maxHeight / scale + 'px;');
       } else {
          let monitor = Main.layoutManager.primaryMonitor;
          let maxHeight = Math.round(monitor.height - Main.panel.actor.height - this.actor.get_theme_node().get_length('-boxpointer-gap'));
@@ -771,11 +948,9 @@ ConfigurableMenu.prototype = {
 
    repositionActor: function(actor) {
       if((this.sourceActor)&&(this.sourceActor != actor)) {
-         actor._delegate = this.sourceActor._delegate;
-         actor._applet = this.sourceActor._applet;
-         if(this.isOpen)
-            this._boxPointer.trySetPosition(actor, this._arrowAlignment);
-
+         //actor._delegate = this.sourceActor._delegate;
+         //actor._applet = this.sourceActor._applet;
+         this._boxPointer.trySetPosition(actor, this._arrowAlignment);
       }
    },
 
@@ -792,63 +967,80 @@ ConfigurableMenu.prototype = {
    },
 
    openClean: function(animate) {
-      if (this.isOpen)
+     try {
+      if((this.isOpen)||(!this._reactive))
          return;
-      this.old_parent = this.actor.get_parent();
-      if(this.old_parent)
-          this.old_parent.remove_actor(this.actor);
-      Main.uiGroup.add_actor(this.actor);
-      Main.popup_rendering = false;
 
-      if (animate)
-         this.animating = animate;
-      else
-         this.animating = false;
+      this.isOpen = true;
+
+      this._closeBrotherMenu();
+
+      if(this._floating) {
+         if(animate)
+            this.animating = animate;
+         else
+            this.animating = false;
+         this.parent_sourceActor = this.launcher.sourceActor;
+         this.launcher.sourceActor = Main.uiGroup;
+         this._boxPointer.show(animate, Lang.bind(this, function () {
+            this.animating = false;
+         }));
+         if(!this._boxPointer._sourceActor)
+            this._boxPointer.setPosition(this.sourceActor, this._arrowAlignment);
+         if(this._automatic_open_control) {
+            this._paint_id = this.actor.connect("paint", Lang.bind(this, this._on_paint));
+            Main.popup_rendering = true;
+         } else {
+            Main.popup_rendering = false;
+         }
+         if(global.menuStackLength == undefined)
+            global.menuStackLength = 0;
+         global.menuStackLength += 1;
+
+         this.actor.raise_top();
+      } else {
+         this.actor.show();
+      }
 
       this.setMaxHeight();
 
-      this.isOpen = true;
-        
-      if (global.menuStackLength == undefined)
-         global.menuStackLength = 0;
-      global.menuStackLength += 1;
-
-      this._boxPointer.setPosition(this.sourceActor, this._arrowAlignment);
-
-      if(this._automatic_open_control)
-          this._paint_id = this.actor.connect("paint", Lang.bind(this, this._on_paint));
-
-      this._boxPointer.show(animate, Lang.bind(this, function () {
-         this.animating = false;
-      }));
-
-      this.actor.raise_top();
+      let needsScrollbar = this._needsScrollbar();
+      this._scroll.vscrollbar_policy =
+            needsScrollbar ? Gtk.PolicyType.AUTOMATIC : Gtk.PolicyType.NEVER;
 
       this.emit('open-state-changed', true);
+     } catch(e) {Main.notify("err2" , e.message)}
    },
 
    closeClean: function(animate) {
-      if (!this.isOpen)
+      if((!this.isOpen)||(!this._reactive))
          return;
 
-       this.isOpen = false;
-       global.menuStackLength -= 1;
+      if(this._openedSubMenu) {
+         this._openedSubMenu.close();
+         this._openedSubMenu = null;
+      }
 
-       if(Main.panelManager) {
-          for (let i in Main.panelManager.panels) {
-             if (Main.panelManager.panels[i])
-                Main.panelManager.panels[i]._hidePanel();
-          }
-       }
+      if(this._floating) {
+         this.launcher.sourceActor = this.parent_sourceActor;
+         this._boxPointer.hide(animate);
+         if(Main.panelManager) {
+            for (let i in Main.panelManager.panels) {
+               if (Main.panelManager.panels[i])
+                  Main.panelManager.panels[i]._hidePanel();
+            }
+         }
+         global.menuStackLength -= 1;
+      } else {
+         this.actor.hide();
+      }
 
-       if (this._activeMenuItem)
-          this._activeMenuItem.setActive(false);
+      if (this._activeMenuItem)
+         this._activeMenuItem.setActive(false);
 
-       this._boxPointer.hide(animate);
-       Main.uiGroup.remove_actor(this.actor);
-        if(this.old_parent)
-          this.old_parent.add_actor(this.actor);
-       this.emit('open-state-changed', false);
+      this.isOpen = false;
+
+      this.emit('open-state-changed', false);
    },
 
    open: function(animate) {
@@ -856,7 +1048,6 @@ ConfigurableMenu.prototype = {
          this.subMenu.close();*/
       if(!this.isOpen) {
          this.openClean();
-         this._boxPointer.trySetPosition(this.sourceActor, this._arrowAlignment);
          this._applyEffectOnOpen();
       }
    },
@@ -867,6 +1058,7 @@ ConfigurableMenu.prototype = {
       if(this.isOpen) {
          this._applyEffectOnClose();
       }
+
    },
 
    _applyEffectOnOpen: function(animate) {
@@ -1206,19 +1398,76 @@ ConfigurableMenu.prototype = {
       });
    },
 
-   destroy: function() {
-      if(this._popupMenu) {
-         this._popupMenu.close();
-         this._menuManager.removeMenu(this._popupMenuu);
-         this._popupMenu.destroy();
-         this._popupMenu = null;
+   _closeBrotherMenu: function() {
+      let top_menu = this._getTopMenu();
+      if (top_menu) {
+         if ((top_menu._openedSubMenu)&&(this != top_menu._openedSubMenu)&&
+            (top_menu._openedSubMenu.isOpen)&&(this.isOpen)) {
+            top_menu._openedSubMenu.close(true);
+         }
+         if (this.isOpen)
+            top_menu._openedSubMenu = this;
       }
-      PopupMenu.PopupMenuBase.prototype.destroy.call(this);
+   },
+
+   _releaseActorState: function() {
+      let parent = this._scroll.get_parent();
+      if(parent != null)
+          parent.remove_actor(this._scroll);
+      parent = this._boxPointer.actor.get_parent();
+      if((parent != null)&&(parent != Main.uiGroup))
+         parent.remove_actor(this._boxPointer.actor);
+    },
+
+    _needsScrollbar: function() {
+       let topMenu = this._getTopMenu();
+       if(!topMenu)
+          return false;
+       let [topMinHeight, topNaturalHeight] = topMenu.actor.get_preferred_height(-1);
+       let topThemeNode = topMenu.actor.get_theme_node();
+
+       let topMaxHeight = topThemeNode.get_max_height();
+       return topMaxHeight >= 0 && topNaturalHeight >= topMaxHeight;
+   },
+
+   _getTopMenu: function() {
+      let actor = this.launcher.actor;
+      while(actor) {
+         if((actor._delegate) && ((actor._delegate instanceof PopupMenu.PopupMenu) ||
+            (actor._delegate instanceof PopupMenu.PopupSubMenu) || (actor.get_parent() == Main.uiGroup)))
+            return actor._delegate;
+         actor = actor.get_parent();
+      }
+      return null;
+   },
+
+   destroy: function() {
+      if(this.fixedPointer > 0) {
+         this._boxPointer.actor.disconnect(this.fixedPointer);
+         this.fixedPointer = 0;
+         this._releaseActorState();
+         this.actor = this._scroll;
+         this._boxPointer.actor.destroy();
+         if(this.subMenu) {
+            this.subMenu.close();
+            this.subMenu.destroy();
+            this.subMenu = null;
+         }
+         if(this._menuManager)
+            this._menuManager.removeMenu(this);
+         PopupMenu.PopupMenuBase.prototype.destroy.call(this);
+      }
    }
 };
 
-function ConfigurablePopupMenu(launcher, arrowAlignment, orientation, parentMenu) {
-   this._init(launcher, arrowAlignment, orientation, parentMenu);
+/**
+ * ConfigurablePopupMenu
+ *
+ * Deprecate as is include inside de ConfigurableMenu Class.
+ */
+/*
+function ConfigurablePopupMenu() {
+    this._init.apply(this, arguments);
 };
 
 ConfigurablePopupMenu.prototype = {
@@ -1226,6 +1475,7 @@ ConfigurablePopupMenu.prototype = {
 
    _init: function(launcher, arrowAlignment, orientation, parentMenu) {
       ConfigurableMenu.prototype._init.call(this, parentMenu, arrowAlignment, orientation, this);
+      this.actor._delegate = this;
       this.parentMenu = parentMenu;
       if(this.parentMenu)
           this.parent_sourceActor = this.parentMenu.sourceActor;
@@ -1249,9 +1499,9 @@ ConfigurablePopupMenu.prototype = {
       try {
          if(fixScreen) //{
             this._boxPointer.fixToScreen(this.sourceActor, fixScreen);
-         /*} else {
-            this._boxPointer.fixToScreen(this.parentMenu.actor, fixScreen);
-         }*/
+         //} else {
+         //   this._boxPointer.fixToScreen(this.parentMenu.actor, fixScreen);
+         //}
          this.fixScreen = fixScreen;
       } catch(e) {
          Main.notify("eee", e.message);
@@ -1259,7 +1509,7 @@ ConfigurablePopupMenu.prototype = {
    },
 
    fixToCorner: function(fixCorner) {
-     /* try {
+      try {
          Main.notify("hola");
          if(fixScreen) {
             this._parentMenu = this.parentMenu;
@@ -1274,7 +1524,7 @@ ConfigurablePopupMenu.prototype = {
          }
       } catch(e) {
          Main.notify("eee", e.message);
-      }*/
+      }
    },
 
    repositionActor: function(actor) {
@@ -1285,8 +1535,8 @@ ConfigurablePopupMenu.prototype = {
    },
 
    open: function(animate) {
-      /*if((this.parentMenu != this.parent)&&(!this.parentMenu.isOpen))
-         return;*/
+      //if((this.parentMenu != this.parent)&&(!this.parentMenu.isOpen))
+      //   return;
 
     try {
          Main.notify("open" + this.parentMenu.isOpen)
@@ -1309,7 +1559,12 @@ ConfigurablePopupMenu.prototype = {
       //   this.parent.searchEntry.grab_key_focus();
    }
 };
-
+*/
+/**
+ * Switch
+ *
+ * Just a class to controlled a switch.
+ */
 function ConfigurablePopupSwitchMenuItem() {
     this._init.apply(this, arguments);
 }
@@ -1319,6 +1574,7 @@ ConfigurablePopupSwitchMenuItem.prototype = {
 
     _init: function(text, imageOn, imageOff, active, params) {
         PopupMenu.PopupBaseMenuItem.prototype._init.call(this, params);
+        this.actor._delegate = this;
 
         this._imageOn = imageOn;
         this._imageOff = imageOff;
@@ -1362,6 +1618,11 @@ ConfigurablePopupSwitchMenuItem.prototype = {
     }
 };
 
+/**
+ * RadioButton
+ *
+ * Just a class to show a radio button.
+ */
 function RadioButton() {
     this._init.apply(this, arguments);
 }
@@ -1385,6 +1646,11 @@ RadioButton.prototype = {
     }
 };
 
+/**
+ * Switch
+ *
+ * Just a class to show a switch.
+ */
 function Switch() {
     this._init.apply(this, arguments);
 }
@@ -1415,80 +1681,156 @@ Switch.prototype = {
 /**
  * ConfigurablePopupSubMenuMenuItem
  *
- * A class to extend the cinnamon standar PopupMenuSection
- * to support create an space area on some special context.
+ * A class to extend the cinnamon standar PopupSubMenuMenuItem
+ * but this class will controlled how the submenu will be displayed.
+ * we want to have a foating submenu and automatically closing it
+ * with a timer or when other brother submenu item was selected.
  */
 function ConfigurablePopupSubMenuMenuItem() {
-    this._init.apply(this, arguments);
+   this._init.apply(this, arguments);
 }
 
 ConfigurablePopupSubMenuMenuItem.prototype = {
-    __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
+   __proto__: PopupMenu.PopupSubMenuMenuItem.prototype,
 
-    _init: function(text, hide_expander) {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this);
+   _init: function(text, hide_expander) {
+      ConfigurablePopupMenuItem.prototype._init.call(this, text);
+      this.actor._delegate = this;
+      this.sourceActor = this.actor;
+      this.actor.add_style_class_name('popup-submenu-menu-item');
+      this._floating = false;
+      this._arrowSide = St.Side.RIGHT;
+      this._hide_expander = hide_expander;
 
-        this.actor.add_style_class_name('popup-submenu-menu-item');
+      this._icon = new St.Icon({ style_class: 'popup-menu-icon' });
+      this.actor.insert_before(this._icon, this.label);
+      this._icon.hide();
 
-        let table = new St.Table({ homogeneous: false,
-                                      reactive: true });
+      this._triangle = new St.Icon({ icon_name: "media-playback-start",
+                                     icon_type: St.IconType.SYMBOLIC,
+                                     style_class: 'popup-menu-icon' });
+      this._triangle.rotation_center_z_gravity = Clutter.Gravity.CENTER;
+      if(this._hide_expander)
+         this._triangle.hide();
+/*
+      this.actor.remove_actor(this.label);
+      this.table = new St.Table({ homogeneous: false, reactive: true });
+      this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
+      this.label.set_margin_left(6.0);
+      this.table.add(this.label, {row: 0, col: 1, col_span: 1, x_align: St.Align.START});
 
-        if (!hide_expander) {
-            this._triangle = new St.Icon({ icon_name: "media-playback-start",
-                                icon_type: St.IconType.SYMBOLIC,
-                                style_class: 'popup-menu-icon' });
+      this.actor.add(this.table, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
+*/
+      this.actor.add(this._triangle, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
 
-            table.add(this._triangle,
-                    {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
 
-            this.label = new St.Label({ text: text });
-            this.label.set_margin_left(6.0);
-            table.add(this.label,
-                    {row: 0, col: 1, col_span: 1, x_align: St.Align.START});
-        }
-        else {
-            this.label = new St.Label({ text: text });
-            table.add(this.label,
-                    {row: 0, col: 0, col_span: 1, x_align: St.Align.START});
-        }
-        this.actor.label_actor = this.label;
-        this.addActor(table, { expand: true, span: 1, align: St.Align.START });
-
-        this.menu = new ConfigurablePopupMenu(null, 0.0, St.Side.LEFT);
-        this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
-        this.actor.connect('button-release-event', Lang.bind(this, this._onButtonReleaseEvent));
-        this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
-    },
-
-    _onButtonReleaseEvent: function (actor, event) {
-        this.activate(event, false);
-        return true;
-    },
-
-   activate: function(event) {
-    try {
-      let topMenu = this._getTopMenu(this.actor.get_parent());
-      if(!topMenu)
-         return false;
-
-      this.menu.set_parent_menu(topMenu);
-      this.menu.set_launcher(topMenu);
-
-      if(this == topMenu._openedSubMenu)
-         return false;
-
-      if(topMenu._openedSubMenu && topMenu._openedSubMenu.isOpen)
-         topMenu._openedSubMenu.close(false);
-
-      topMenu._openedSubMenu = this;
-      this.menu.open(true);
-    } catch(e) {Main.notify("" + e.message);}
-      return true
+      this.topMenu = this._getTopMenu(this.actor.get_parent());
+      this.menu = new ConfigurableMenu(this, 0.0, St.Side.LEFT, null, null, false);
+      this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
+      this.actor.connect('notify::mapped', Lang.bind(this, this._onMapped));
+      //this.setSubMenuFloating(false);
+      this.setSubMenuFloating(true);
+      //this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));*/
    },
+
+   setSubMenuFloating: function (floating) {
+      if(floating) {
+         this._floating = floating;
+         if(!this.topMenu)
+            this.topMenu = this._getTopMenu(this.actor.get_parent());
+         this.menu.setFloatingState(true, this.topMenu);
+      } else {
+         this.menu.setFloatingState(false, this);
+      }
+   },
+
+   _subMenuOpenStateChanged: function(menu, open) {
+      this.actor.change_style_pseudo_class('open', open);
+      if((!this._hide_expander)&&(!this._floating)) {
+         if(menu.isOpen) {
+            let rotation_angle = 90;
+            if (this.actor.get_direction() == St.TextDirection.RTL)
+               rotation_angle = 270;
+            this._triangle.rotation_angle_z = rotation_angle;
+         } else {
+            this._triangle.rotation_angle_z = 0;
+         }
+      }
+   },
+
+   _onMapped: function() {
+     /* if((!this._hide_expander)&&(this._floating)) {
+         let arrowSide = null;
+         if(!this.topMenu)
+            this.topMenu = this._getTopMenu(this.actor.get_parent());
+         if(this.topMenu)
+            arrowSide = St.Side.LEFT;//this.topMenu._arrowSide;
+         if((arrowSide)&&(this._arrowSide != arrowSide)) {
+            this._arrowSide = arrowSide;
+            this.table.remove_actor(this._triangle);
+            this.table.remove_actor(this.label);
+            this.label.set_margin_left(0.0);
+            this._triangle.set_margin_left(0.0);
+            this._triangle.rotation_angle_z = 0;
+            switch (this._arrowSide) {
+               case St.Side.TOP:
+               case St.Side.BOTTOM:
+                  this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
+                  this.table.add(this.label,     {row: 0, col: 1, col_span: 1,                  x_align: St.Align.START});
+                  this.label.set_margin_left(6.0);
+                  break;
+               case St.Side.LEFT:
+                  this.table.add(this.label,     {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
+                  this.table.add(this._triangle, {row: 0, col: 1, col_span: 1, x_expand: true,  x_align: St.Align.END});
+                  this._triangle.set_margin_left(6.0);
+                  break;
+               case St.Side.RIGHT:
+                  this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.END});
+                  this.table.add(this.label,     {row: 0, col: 1, col_span: 1,                  x_align: St.Align.START});
+                  this.label.set_margin_left(6.0);
+                  this._triangle.rotation_angle_z = 180;
+                  break;
+            }
+         }
+      }*/
+   },
+
+   _onButtonReleaseEvent: function (actor, event) {
+      //this.activate(event, false);
+      if(!this.menu.isOpen) {
+         if(this._floating) {
+            if((!this.topMenu)||(this.topMenu != this.menu.launcher)) {
+               this.topMenu = this._getTopMenu(this.actor.get_parent());
+               if(this.topMenu)
+                  this.menu.setLauncher(this.topMenu);
+            }
+            if(!this.menu.isInPosition(this.actor)) {
+               this.menu.repositionActor(this.actor);
+            }
+         } else if (this._floating != this.menu._floating){
+            this.menu.setFloatingState(false, this);
+         }
+      }
+      this.menu.toggle();
+      return true;
+   },
+
+  // activate: function(event) {
+  //    return true;
+  // },
+
+  // closeBrotherMenu: function() {
+  //    if(this.menu != this.topMenu._openedSubMenu) {
+  //       if(this.topMenu._openedSubMenu && this.topMenu._openedSubMenu.isOpen) {
+  //          this.topMenu._openedSubMenu.close(false);
+  //       }
+  //       this.topMenu._openedSubMenu = this.menu;
+  //    }
+  // },
 
    _getTopMenu: function(actor) {
       while(actor) {
-         if((actor._delegate) && (actor._delegate instanceof PopupMenu.PopupMenu))
+         if((actor._delegate) && (actor.get_parent() == Main.uiGroup))//(actor._delegate instanceof PopupMenu.PopupMenu))
             return actor._delegate;
          actor = actor.get_parent();
       }
@@ -1500,7 +1842,7 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
  * ConfigurablePopupMenuSection
  *
  * A class to extend the cinnamon standar PopupMenuSection
- * to support create an space area on some special context.
+ * to support the creation of an space area on some special context.
  */
 function ConfigurablePopupMenuSection() {
     this._init.apply(this, arguments);
@@ -1511,14 +1853,15 @@ ConfigurablePopupMenuSection.prototype = {
 
     _init: function() {
         PopupMenu.PopupMenuSection.prototype._init.call(this);
+        this.actor._delegate = this;
     },
 };
 
 /**
  * ConfigurablePopupMenuItem
  *
- * A class to extend the cinnamon standar PopupMenuItem
- * to support ornaments and automatically close the submenus.
+ * A class to swap the cinnamon standar PopupMenuItem
+ * to support a normal St actors.
  */
 function ConfigurablePopupMenuItem() {
     this._init.apply(this, arguments);
@@ -1535,7 +1878,6 @@ ConfigurablePopupMenuItem.prototype = {
                                          sensitive: true,
                                          style_class: null,
                                          focusOnHover: true,
-                                         hideIcon: true
                                        });
         this.actor = new St.BoxLayout({ style_class: 'popup-menu-item',
                                         reactive: params.reactive,
@@ -1571,43 +1913,64 @@ ConfigurablePopupMenuItem.prototype = {
             this.actor.connect('key-focus-out', Lang.bind(this, this._onKeyFocusOut));
         }
 
-        this._icon = new St.Icon({ style_class: 'popup-menu-icon' });
         this.label = new St.Label({ text: text });
         this.actor.label_actor = this.label;
-        this._ornament = new St.BoxLayout();
-        this.actor.add(this._icon, { x_align: St.Align.START });
         this.actor.add(this.label, { y_align: St.Align.MIDDLE, y_fill:false, expand: true });
-        this.actor.add(this._ornament, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false, expand: true });
-        if (params.hideIcon)
-            this._icon.hide();
+    }
+};
+
+/**
+ * ConfigurableApplicationMenuItem
+ *
+ * A class to extend the cinnamon standar PopupMenuItem
+ * to support ornaments and automatically close the submenus.
+ */
+function ConfigurableApplicationMenuItem() {
+    this._init.apply(this, arguments);
+}
+
+ConfigurableApplicationMenuItem.prototype = {
+    __proto__: ConfigurablePopupMenuItem.prototype,
+
+    _init: function(text) {
+        ConfigurablePopupMenuItem.prototype._init.call(this, text);
+        this.actor._delegate = this;
+
+        this._icon = new St.Icon({ style_class: 'popup-menu-icon' });
+        this._accel = new St.Label();
+        this._ornament = new St.Bin();
+        this.actor.insert_before(this._icon, this.label);
+        this.actor.add(this._accel,    { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
+        this.actor.add(this._ornament, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
+        this._icon.hide();
+    },
+
+    setAccel: function(accel) {
+        this._accel.set_text(accel);
     },
 
     setOrnament: function(ornamentType, status) {
-        try {
-        this._ornament.get_children().forEach(function(child) {
-            child.destroy();
-        });
-        if (ornamentType == OrnamentType.CHECK) {
-            let switchOrnament = new Switch(status);
-            this._ornament.add(switchOrnament.actor);
-            //Main.notify("hola CHECK")
-        } else if (ornamentType == OrnamentType.DOT) {
-            //Main.notify("hola CHECK")
-            let radioOrnament = new RadioButton(status);
-            //Main.notify("hola CHECK")
-            this._ornament.add(radioOrnament.actor);
-            let label = new St.Label();
-            label.set_text("proba");
-            //this._ornament.add(label);
-            //Main.notify("hola RADIO")
-            //this._ornament.set_text('\u2022');
-            //this.actor.add_accessible_state(Atk.StateType.CHECKED);
-        } else {
-            //Main.notify("hola NONE")
-            //this._ornament.set_text('');
-            //this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+        if(this._ornament.child)
+           this._ornament.child.destroy();
+        let ornament;
+        switch (ornamentType) {
+        case OrnamentType.CHECK:
+            let switchOrn = new Switch(status);
+            this._ornament.child = switchOrn.actor;
+            break;
+        case OrnamentType.DOT:
+            this._ornament.child = new St.Label();
+            if(status) {
+                this._ornament.child.set_text('\u2022');
+                if(this.actor.add_accessible_state)
+                    this.actor.add_accessible_state(Atk.StateType.CHECKED);
+            } else {
+                this._ornament.child.set_text('\u274D');
+                if(this.actor.remove_accessible_state)
+                    this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+            }
+            break;
         }
-        } catch(e) {Main.notify("error " + e.message);}
     }
 };
 
@@ -1623,21 +1986,24 @@ ConfigurableMenuApplet.prototype = {
 
    _init: function(launcher, orientation, menuManager) {
       PopupMenu.PopupMenuBase.prototype._init.call(this, launcher.actor, 'applet-container-box');
-      this._launcher = launcher;
+      this.launcher = launcher;
       this._orientation = orientation;
       this._menuManager = menuManager;
       this.actor = new St.BoxLayout({ style_class: 'applet-container-box', reactive: false, track_hover: false });
+      this.actor._delegate = this;
       this.actor.vertical = false;
+      this._floating = true;
+      this.minItemWidth = 34;
       this.actor.hide();
-      this._launcher.actor.add(this.actor);
-      this._launcher.actor.set_track_hover(false);
-      this.menu = new ConfigurableMenu(this._launcher, 0.0, this._orientation);
-      let section = new PopupMenu.PopupMenuSection();
-      this.menu.addMenuItem(section);
-      this.menu._section = section;
-      this._menuManager.addMenu(this.menu);
-      this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
+      this.launcher.actor.add(this.actor);
+      this.launcher.actor.set_track_hover(false);
+      this.menu = null;
       this.default_displayed = true;
+      this.actor.add_actor(this.box);
+      this.box.set_vertical(false);
+      this.scale = 1;
+      if(global.ui_scale)
+         this.scale = global.ui_scale;
       this.actor.show();
    },
 
@@ -1647,107 +2013,78 @@ ConfigurableMenuApplet.prototype = {
    },
 
    close: function() {
+      if((this.menu)&&(this.menu.isOpen))
+         this.menu.close();
       this.isOpen = false;
       this.actor.hide();
    },
 
    addMenuItem: function(menuItem, position) {
-      PopupMenu.PopupMenuBase.prototype.addMenuItem.call(this, menuItem, position);
-      if(menuItem instanceof PopupMenu.PopupSubMenuMenuItem) {
-           let position = this._getMenuItems().indexOf(menuItem);
-           this._reparent_submenu_menuitem(menuItem, position);
+      if ((this._floating)&&(menuItem instanceof PopupMenu.PopupSubMenuMenuItem)) {
+         let before_item = null;
+         if (position == undefined) {
+            this.box.add(menuItem.actor);
+         } else {
+            let items = this._getMenuItems();
+            if (position < items.length) {
+               before_item = items[position].actor;
+               this.box.insert_before(menuItem.actor, before_item);
+            } else
+               this.box.add(menuItem.actor);
+         }
+         this._connectSubMenuSignals(menuItem, menuItem.menu);
+         this._connectItemSignals(menuItem);
+         menuItem._closingId = this.connect('open-state-changed', function(self, open) {
+            if (!open)
+               menuItem.menu.close(false);
+         });
+         this.length++;
+         this._setMenuInPosition(menuItem);
+      } else
+         PopupMenu.PopupMenu.prototype.addMenuItem.call(this, menuItem, position);
+   },
+
+   _setMenuInPosition: function(menuItem) {
+      if(this._floating) {
+         menuItem.menu.setFloatingState(true, menuItem);
+         menuItem.menu.setArrowSide(this._orientation);
+         menuItem._triangle.hide();
+         menuItem._icon.hide();
+         let currentWidth = menuItem.label.width - menuItem.label.get_margin_left() - menuItem.label.get_margin_right();
+         let minWidth = (this.minItemWidth / this.scale);
+         if(currentWidth < minWidth) {
+            let margin = (minWidth - currentWidth)/2;
+            menuItem.label.set_margin_left(margin);
+            menuItem.label.set_margin_right(margin);
+         } else {
+            menuItem.label.set_margin_left(2.0);
+            menuItem.label.set_margin_right(2.0);
+         }
+         menuItem.label.set_style_class_name('applet-label');
+         //menuItem.actor.set_style_class_name('popup-submenu-menu-item');
+         menuItem.actor.add_style_class_name('applet-box');
+         menuItem.actor.add_style_class_name('apopup-menu-item');
+         menuItem.actor.connect('button-press-event', Lang.bind(this, this._onButtonPressEvent));
       } else {
-          global.log("Try to insert a no compatible item " + menuItem + " at the position " + position);
-          throw TypeError('The ConfigurableMenuApplet only allow to have PopupSubMenuMenuItem as a children');
-      }  
-   },
-
-   _reparent_submenu_menuitem: function(menuItem, position) {
-       menuItem.actor.hide();
-       //Extract the label from the table and remove the rest of items.
-       let children = menuItem.actor.get_children();
-       let table = children[0];
-       table.remove_actor(menuItem.label);
-       if(menuItem._triangle)
-           menuItem._triangle.destroy();
-       menuItem.label.set_style_class_name('applet-label');//'menu-application-button-label');
-       menuItem.actor.destroy_all_children();
-       menuItem.disconnect(menuItem._activateId);
-       menuItem.menu.disconnect(menuItem._subMenuActivateId);
-       menuItem._activateId = menuItem.connect('activate', Lang.bind(menuItem, function (menuItem, event, keepMenu) {
-            menuItem.emit('activate', menuItem, keepMenu);
-       }));
-       /*menuItem._subMenuActivateId = menuItem.menu.connect('activate', Lang.bind(menuItem.menu, function(submenu, submenuItem, keepMenu) {
-            Main.notify("holaaaaaaaaaa2222222")
-            submenu.emit('activate');
-       }));*/
-       menuItem._subMenuActivateId = 0;
-
-       let actor_applet = new St.BoxLayout({ style_class: 'applet-box', reactive: true, track_hover: true });
-       actor_applet._delegate_item = menuItem;
-       actor_applet.connect('button-press-event', Lang.bind(this, this._onButtonPressEvent));
-       this.actor.add(actor_applet, { y_fill: true });
-       actor_applet.add(menuItem.label, { y_fill: false });
-       menuItem.label.realize();
-
-       let parent = menuItem.menu.actor.get_parent();
-       if(parent)
-           parent.remove_actor(menuItem.menu.actor);
-       if(menuItem.menu.set_parent_menu) {
-           menuItem.menu.set_parent_menu(this.menu);
-           menuItem.menu.set_launcher(this._launcher);
-           let menuManager = new PopupMenu.PopupMenuManager(this._launcher);
-           menuManager.addMenu(menuItem.menu);
-       }
-       menuItem.menu._arrow = null;
-       menuItem.menu.actor.set_style_class_name('');
-       menuItem.menu.actor.style = "-arrow-border-radius: 0px; \
-                                    -arrow-background-color: rgba(80,80,80,0.0); \
-                                    -arrow-border-width: 0px; \
-                                    -arrow-border-color: #a5a5a5; \
-                                    -arrow-base: 0px; \
-                                    -arrow-rise: 0px;"
-       menuItem.menu.open = function(animate) {};
-       menuItem.menu.close = Lang.bind(this, function(animate) {
-          if(this.menu.isOpen)
-              this.menu.closeClean();
-       });
-       this.menu._section.actor.add(menuItem.menu.actor,
-          {x_fill: true, y_fill: true, y_align: St.Align.START, expand: true});
-       menuItem.menu.actor.hide();
-   },
-/*
-   _onItemButtonReleaseEvent: function (actor, event) {
-       this.menu.current.activate(event, false);
-       return true;
-   },
-*/
-   _onOpenStateChanged: function(menu, open) {
-      this.menu.current.menu.emit('open-state-changed', open);
+         if(!this.menu)
+            this.menu = new ConfigurableMenu(this, 0.0, this._orientation, this._menuManager, null, true);
+         this.menu.setFloatingState(true, this);
+         this.menu.connect('open-state-changed', Lang.bind(this, this._onOpenStateChanged));
+      }
    },
 
    _onButtonPressEvent: function (actor, event) {
-         let section_actor = this.menu._section.actor;
-         this.menu.current = actor._delegate_item;
-         let children = section_actor.get_children();
-         for(let i = 0; i < children.length; i++) {
-            children[i]._delegate.close();
-            children[i].hide();
-         }
-         this.menu.current.menu.actor.show();
-         this.menu.current.menu.isOpen = true;
-         if(!this.menu.isOpen)
-            this.menu.openClean();
-         this.menu.repositionActor(actor);
+      if ((event.get_button() == 1)&&(this.launcher._draggable.inhibit)) {
          return true;
+      }
+      return false;
    },
 
    destroy: function() {
       PopupMenu.PopupMenuBase.prototype.destroy.call(this);
-      if(this.menu.isOpen)
-         this.menu.closeClean();
-      this.menu.destroy();
-      this.actor.destroy();
+      if(this.menu)
+         this.menu.destroy();
+      //log("destroyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy")
    }
 };
 /*
@@ -1785,10 +2122,500 @@ ConfigurableMenuTextIconItem.prototype = {
    }
 };*/
 
+
+function PopupMenuAbstractFactory() {
+    throw new TypeError('Trying to instantiate abstract class PopupMenuAbstractFactory');
+}
+
+PopupMenuAbstractFactory.prototype = {
+
+    _init: function(id, children_ids, params) {
+        this._id = id;
+        this._children_ids = children_ids;
+        if(!this._children_ids)
+            this._children_ids = new Array();
+        this._internal_signals_handlers = new Array();
+        this._external_signals_handlers = new Array();
+        this._shell_item_signals_handlers = null;
+        this._shell_menu_signals_handlers = null;
+        this.shellItem = null;
+        this.parent = null;
+        this._shellItemDestroyId = 0;
+        this._shellMenuDestroyId = 0;
+
+        //properties
+        params = Params.parse (params, { label: "",
+                                         accel: "",
+                                         sensitive: true,
+                                         visible: true,
+                                         toggleType: "",
+                                         toggleState: false,
+                                         iconName: "",
+                                         iconData: null,
+                                         action:"",
+                                         paramType: "", //this is a variant
+                                         type: FactoryClassTypes.MenuItemClass
+                                       });
+        this._label = params.label;
+        this._accel = params.accel;
+        this._sensitive = params.sensitive;
+        this._visible = params.visible;
+        this._toggleType = params.toggleType;
+        this._toggleState = params.toggleState;
+        this._iconName = params.iconName;
+        this._iconData = params.iconData;
+        this._type = params.type;
+        this._action = params.action;
+        this._paramType = params.paramType;
+    },
+
+    getItemById: function(id) {throw new Error('Trying to use abstract function getItemById');},
+    handleEvent: function(event, params) {throw new Error('Trying to use abstract function handleEvent');},
+    //is_root: function() {throw new Error('Trying to use abstract function is_root');},
+
+    isVisible: function() {
+        return this._visible;
+    },
+
+    setVisible: function(visible) {
+        if (this._visible != visible) {
+            this._visible = visible;
+            this._updateVisible();
+        }
+    },
+
+    isSensitive: function() {
+        return this._sensitive;
+    },
+
+    setSensitive: function(sensitive) {
+        if (this._sensitive != sensitive) {
+            this._sensitive = sensitive;
+            this._updateSensitive();
+        }
+    },
+
+    getLabel: function() {
+        return this._label; 
+    },
+
+    setLabel: function(label) {
+        if (this._label != label) {
+            this._label = label;
+            this._updateLabel();
+        }
+    },
+
+    getAction: function() {
+        return this._action;
+    },
+
+    setAction: function(action) {
+        if (this._action != action) {
+            this._action = action;
+        }
+    },
+
+    getParamType: function() {
+       return this._paramType;
+    },
+
+    setParamType: function(paramType) {
+        if (this._paramType != paramType) {
+            this._paramType = paramType;
+        }
+    },
+
+    getFactoryType: function() {
+        return this._type;
+    },
+
+    setFactoryType: function(type) {
+        if ((type) && (this._type != type)) {
+            this._type = type;
+            this._updateType();
+        }
+    },
+
+    getIconName: function() {
+        return this._iconName;
+    },
+
+    setIconName: function(iconName) {
+        if (this._iconName != iconName) {
+            this._iconName = iconName;
+            this._updateImage();
+        }
+    },
+
+    getGdkIcon: function() {
+        return this._iconData;
+    },
+
+    setGdkIcon: function(iconData) {
+        if (this._iconData != iconData) {
+            this._iconData = iconData;
+            this._updateImage();
+        }
+    },
+
+    getToggleType: function() {
+        return this._toggleType;
+    },
+
+    setToggleType: function(toggleType) {
+        if (this._toggleType != toggleType) {
+            this._toggleType = toggleType;
+            this._updateOrnament();
+        }
+    },
+
+    getToggleState: function() {
+        return this._toggleState;
+    },
+
+    setToggleState: function(toggleState) {
+        if (this._toggleState != toggleState) {
+            this._toggleState = toggleState;
+            this._updateOrnament();
+        }
+    },
+
+    getAccel: function() {
+        return this._accel;
+    },
+
+    setAccel: function(accel) {
+        if (this._accel != accel) {
+            this._accel = accel;
+            this._updateAccel();
+        }
+    },
+
+    setShellItem: function(shellItem, handlers) {
+        if (this.shellItem != shellItem) {
+            if(this.shellItem) {
+                //this.shellItem.destroy();
+                global.logWarning("Attempt to override a shellItem, so we automatically destroy our original shellItem.");
+            }
+            this.shellItem = shellItem;
+
+            if (this.shellItem) {
+                // initialize our state
+                this._updateLabel();
+                this._updateOrnament();
+                this._updateAccel();
+                this._updateImage();
+                this._updateVisible();
+                this._updateSensitive();
+
+                this._internal_signals_handlers = this._connectAndSaveId(this, handlers);
+
+                if (this.shellItem.menu) {
+                    //this._shell_menu_signals_handlers = this._connectAndSaveId(this.shellItem.menu, menuHandlers);
+                    this._shell_menu_signals_handlers = this._connectAndSaveId(this.shellItem.menu, {
+                        'open-state-changed': Lang.bind(this, this._onOpenStateChanged)
+                    });
+                    this._shell_item_signals_handlers = this._connectAndSaveId(this.shellItem, {
+                        'activate':  Lang.bind(this, this._onActivate)
+                    });
+                    this._shellMenuDestroyId = this.shellItem.menu.connect('destroy', Lang.bind(this, this._onShellMenuDestroyed));
+                } else {
+                    this._shell_item_signals_handlers = this._connectAndSaveId(this.shellItem, {
+                        'open-state-changed': Lang.bind(this, this._onOpenStateChanged),
+                        'activate':  Lang.bind(this, this._onActivate)
+                    });
+                }
+                //this._shell_item_signals_handlers = this._connectAndSaveId(this.shellItem, shellItemHandlers);
+                this._shellItemDestroyId = this.shellItem.connect('destroy', Lang.bind(this, this._onShellItemDestroyed));
+            }
+        }
+    },
+
+    _updateLabel: function() {
+        if ((this.shellItem)&&(this.shellItem.label)) {
+            let label = this.getLabel();
+
+            if (this.shellItem.label) // especially on GS3.8, the separator item might not even have a hidden label
+                this.shellItem.label.set_text(label);
+        }
+    },
+
+    _updateOrnament: function() {
+        if ((this.shellItem)&&(this.shellItem.setOrnament)) { // separators and alike might not have gotten the polyfill
+            if (this.getToggleType() == "checkmark") {
+                this.shellItem.setOrnament(OrnamentType.CHECK, this.getToggleState());
+            } else if (this.getToggleType() == "radio") {
+                this.shellItem.setOrnament(OrnamentType.DOT, this.getToggleState());
+            } else {
+                this.shellItem.setOrnament(OrnamentType.NONE);
+            }
+        }
+    },
+
+    _updateAccel: function() {
+        if ((this.shellItem)&&(this.shellItem._accel)) {
+            let accel = this.getAccel();
+            if(accel) {
+                this.shellItem._accel.set_text(accel);
+            }
+        }
+    },
+
+    _updateImage: function() {
+        if ((this.shellItem)&&(this.shellItem._icon)) {// might be missing on submenus / separators
+            let iconName = this.getIconName();
+            if (iconName) {
+                this.shellItem._icon.icon_name = iconName;
+                this.shellItem._icon.show();
+            } else {
+                let gicon = this.getGdkIcon();
+                if (gicon) {
+                    this.shellItem._icon.gicon = gicon;
+                    this.shellItem._icon.show();
+                }
+            }
+        }
+    },
+
+    _updateVisible: function() {
+        if (this.shellItem) {
+            this.shellItem.actor.visible = this.isVisible();
+        }
+    },
+
+    _updateSensitive: function() {
+        if ((this.shellItem)&&(this.shellItem.setSensitive)) {
+            this.shellItem.setSensitive(this.isSensitive());
+        }
+    },
+
+    _updateType: function() {
+        this.emit('type-changed');
+    },
+
+    getShellItem: function() {
+        return this.shellItem;
+    },
+
+    get_id: function() {
+        return this._id;
+    },
+
+    getChildrenIds: function() {
+        return this._children_ids.concat(); // clone it!
+    },
+
+    getChildren: function() {
+        return this._children_ids.map(function(child_id) {
+            return this.getItemById(child_id);
+        }, this);
+    },
+
+    getParent: function() {
+        return this.parent;
+    },
+
+    setParent: function(parent) {
+        this.parent = parent;
+    },
+
+    addChild: function(pos, child_id) {
+        let factoryItem = this.getItemById(child_id);
+        if(factoryItem) {
+            let shellItem = factoryItem.getShellItem();
+            //If our item is previusly asigned, so destroy first the shell item.
+            if(shellItem) {
+                shellItem.destroy();
+            }
+            factoryItem.setParent(this);
+            this._children_ids.splice(pos, 0, child_id);
+            this.emit('child-added', factoryItem, pos);
+        }
+    },
+
+    removeChild: function(child_id) {
+        // find it
+        let pos = -1;
+        for (let i = 0; i < this._children_ids.length; ++i) {
+            if (this._children_ids[i] == child_id) {
+                pos = i;
+                break;
+            }
+        }
+
+        if (pos < 0) {
+            global.logError("Trying to remove child which doesn't exist");
+        } else {
+            this._children_ids.splice(pos, 1);
+            let factoryItem = this.getItemById(child_id);
+            if(factoryItem) {
+                factoryItem.setParent(null);
+                let shellItem = factoryItem.getShellItem();
+                if(shellItem)
+                    shellItem.destroy();
+                this.emit('child-removed', factoryItem);
+            }
+        }
+        if (this._children_ids.length == 0)
+            this.emit('childs-empty');
+    },
+
+    moveChild: function(child_id, newpos) {
+        // find the old position
+        let oldpos = -1;
+        for (let i = 0; i < this._children_ids.length; ++i) {
+            if (this._children_ids[i] == child_id) {
+                oldpos = i;
+                break;
+            }
+        }
+
+        if (oldpos < 0) {
+            global.logError("tried to move child which wasn't in the list");
+            return;
+        }
+
+        if (oldpos != newpos) {
+            this._children_ids.splice(oldpos, 1);
+            this._children_ids.splice(newpos, 0, child_id);
+            this.emit('child-moved', oldpos, newpos, this.getItemById(child_id));
+        }
+    },
+
+    connectAndRemoveOnDestroy: function(handlers) { //handlers = { "signal": handler }
+        this._connectAndSaveId(this, handlers, this._external_signals_handlers);
+    },
+
+    _connectAndSaveId: function(target, handlers , idArray) {// handlers = { "signal": handler }
+        idArray = typeof idArray != 'undefined' ? idArray : [];
+        for (let signal in handlers) {
+            idArray.push(target.connect(signal, handlers[signal]));
+        }
+        return idArray;
+    },
+
+    _disconnectSignals: function(obj, signals_handlers) {
+        if ((obj)&&(signals_handlers)) {
+            for (let pos in signals_handlers)
+                obj.disconnect(signals_handlers[pos]);
+        }
+    },
+
+    _onActivate: function(shellItem, event, keepMenu) {
+        this.handleEvent("clicked");
+    },
+
+    _onOpenStateChanged: function(menu, open) {
+        //this._onShellMenuPreOpened(menu);
+        if (open) {
+            this.handleEvent("opened");
+        } else {
+            this.handleEvent("closed");
+        }
+    },
+
+    _onShellMenuPreOpened: function(menu) {
+        let top_menu = this._getTopMenu(menu);
+        if (top_menu) {
+            if ((top_menu._openedSubMenu)&&(menu != top_menu._openedSubMenu)&&
+                (top_menu._openedSubMenu.isOpen)&&(menu.isOpen)) {
+                top_menu._openedSubMenu.close(true);
+            }
+            if (menu.isOpen)
+               top_menu._openedSubMenu = menu;
+        }
+        if (!menu.isOpen)
+            this._closeAllSubmenuChilds(menu);
+    },
+
+    //HACK: When a submenu will close, also close all childs submenus. 
+    _closeAllSubmenuChilds: function(menu) {
+        let childs = this._getMenuItems(menu);
+        let child;
+        for (let i in childs) {
+            child = childs[i];
+            if (child instanceof PopupMenu.PopupMenuBase) {
+                this._closeAllSubmenuChilds(child);
+            }
+            else if ((child.menu)&&(child.menu.isOpen)) {
+                this._closeAllSubmenuChilds(child.menu);
+                child.menu.close();
+            }
+        }
+    },
+
+    _getTopMenu: function(shellItem) {
+        let actor = shellItem.actor.get_parent();
+        while (actor) {
+            if ((actor._delegate) && ((actor._delegate instanceof PopupMenu.PopupMenu) ||
+                (actor._delegate instanceof PopupMenu.PopupSubMenu)))
+               return actor._delegate;
+            actor = actor.get_parent();
+       }
+       return null;
+   },
+
+    _getMenuItems: function(menu) {
+        return menu.box.get_children().map(Lang.bind(this, function (actor) {
+            return actor._delegate;
+        }));
+    },
+
+    _onShellItemDestroyed: function(shellItem) {
+        if ((this.shellItem)&&(this.shellItem == shellItem)) {
+            if (this._shellItemDestroyId > 0) {
+                this.shellItem.disconnect(this._shellItemDestroyId);
+                this._shellItemDestroyId = 0;
+            }
+            if (this._internal_signals_handlers) {
+                this._disconnectSignals(this, this._internal_signals_handlers);
+                this._internal_signals_handlers = [];
+            }
+            if (this._shell_item_signals_handler) {
+               this._disconnectSignals(this.shellItem, this._shell_item_signals_handlers);
+               this._shell_item_signals_handlers = null;
+            }
+            this.shellItem = null;
+        } else if (this.shellItem) {
+            global.logError("We are not conected with " + shellItem);
+        } else {
+            global.logWarning("We are not conected with any shellItem");
+        }
+    },
+
+    _onShellMenuDestroyed: function(shellMenu) {
+        if (this._shellMenuDestroyId > 0) {
+            shellMenu.disconnect(this._shellMenuDestroyId);
+            this._shellMenuDestroyId = 0;
+        }
+        if (this._shell_menu_signals_handlers) {
+            this._disconnectSignals(this.shellItem, this._shell_menu_signals_handlers);
+            this._shell_menu_signals_handlers = null;
+        }
+    },
+
+    destroy: function() {
+       if (this.shellItem) {
+           this.shellItem.destroy();
+           this.shellItem = null;
+       }
+       this.emit("destroy");
+       // Emit the destroy first, to allow know to external lisener,
+       // then, disconnect the lisener handler.
+       if (this._external_signals_handlers) {
+           this._disconnectSignals(this, this._external_signals_handlers);
+           this._external_signals_handlers = null;
+       }
+       this._internal_signals_handlers = null;
+    }
+};
+Signals.addSignalMethods(PopupMenuAbstractFactory.prototype);
+
 /**
- * A MenuFactory to displayed an abstract dBus menu items inside clutter objects
+ * A MenuFactory to displayed an abstract menu items inside the real cinnamon menu items.
  *
- * Processes events, creates the clutter actors and handles the action on a bidirectional way
+ * Processes events, creates the actors and handles the action on a bidirectional way.
  */
 function MenuFactory() {
     this._init.apply(this, arguments);
@@ -1796,144 +2623,109 @@ function MenuFactory() {
 
 MenuFactory.prototype = {
 
-    _init: function(launcher, orientation, params) {
-        this._launcher = launcher;
-        this._orientation = orientation;
-        this.set_popup_menu_base_class(params);
+    _init: function() {
+        this._menuLikend = new Array();
     },
 
-    set_popup_menu_base_class: function(params) {
-        params = Params.parse (params, { RootMenuClass: PopupMenu.PopupSubMenuMenuItem,
-                                         MenuItemClass: PopupMenu.PopupMenuItem,
-                                         SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
-                                         MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
-                                         SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem,
-                                       });
-        this.RootMenuClass = params.RootMenuClass;
-        this.SubMenuMenuItemClass = params.SubMenuMenuItemClass;
-        this.MenuSectionMenuItemClass = params.MenuSectionMenuItemClass;
-        this.SeparatorMenuItemClass = params.SeparatorMenuItemClass;
-        this.MenuItemClass = params.MenuItemClass;
+    _setPopupMenuBaseClass: function() {
     },
 
-    build_shell_menu: function(dbus_menu, menuManager) {
-        if(!menuManager)
-            menuManager = new PopupMenu.PopupMenuManager(this._launcher);
-     
-        let shellItem = new this.RootMenuClass(this._launcher, this._orientation, menuManager); // the shell menu
+    _createShellItem: function(factoryItem, launcher, orientation) {
+        // Decide whether it's a submenu or not
+        let shellItem = null;
+        let item_type = factoryItem.getFactoryType();
+        if (item_type == FactoryClassTypes.RootMenuClass)
+            shellItem = new Applet.PopupMenu(launcher, orientation);
+        if (item_type == FactoryClassTypes.SubMenuMenuItemClass)
+            shellItem = new PopupMenu.PopupSubMenuMenuItem("FIXME");
+        else if (item_type == FactoryClassTypes.MenuSectionMenuItemClass)
+            shellItem = new PopupMenu.PopupMenuSection();
+        else if (item_type == FactoryClassTypes.SeparatorMenuItemClass)
+            shellItem = new PopupMenu.PopupSeparatorMenuItem('');
+        else if(item_type == FactoryClassTypes.MenuItemClass)
+            shellItem = new PopupMenu.PopupMenuItem("FIXME");
+        //else
+        //    throw new TypeError('Trying to instantiate a shell item with an invalid factory type');
+        return shellItem;
+    },
 
-        if(shellItem instanceof Applet.AppletPopupMenu) {
-            menuManager.addMenu(shellItem);
+    getShellMenu: function(factoryMenu) {
+        let index = this._menuLikend.indexOf(factoryMenu);
+        if (index != -1) {
+            return factoryMenu.getShellItem();
         }
+        return null;
+    },
 
-        let dbusItem = dbus_menu.get_root();
+    buildShellMenu: function(factoryMenu, launcher, orientation) {
+        let shellItem = this.getShellMenu(factoryMenu);
+        if (factoryMenu.shellItem)
+            return factoryMenu.shellItem;
 
-        shellItem._dbusItem = dbusItem;
-        this._attachToMenu(shellItem);
+        if (!(factoryMenu instanceof PopupMenuAbstractFactory)) {
+            throw new Error("MenuFactory: can't construct an instance of \
+                PopupMenu using a non instance of the class PopupMenuAbstractFactory");
+        }
+        // The shell menu
+        let shellItem = this._createShellItem(factoryMenu, launcher, orientation);
+        this._attachToMenu(shellItem, factoryMenu);
 
         return shellItem;
     },
 
-    // This will attach the root dbusItem to an already existing menu that will be used as the root menu.
-    // it will also connect the dbusItem to be automatically destroyed when the menu dies.
-    _attachToMenu: function(shellItem) {
+    // This will attach the root factoryItem to an already existing menu that will be used as the root menu.
+    // it will also connect the factoryItem to be automatically destroyed when the menu dies.
+    _attachToMenu: function(shellItem, factoryItem) {
         // cleanup: remove existing childs (just in case)
         shellItem.removeAll();
 
-        // connect handlers
-        shellItem._menuDisconnectHandlers = [];
-        Utility.connectAndSaveId(shellItem, {
-            'open-state-changed': Lang.bind(this, this._onShellMenuOpened),
-            'destroy'           : Lang.bind(this, this._onDestroyShellMenu)
-        }, shellItem._menuDisconnectHandlers);
-        let dbusItem = shellItem._dbusItem;
-        if(dbusItem) {
-            Utility.connectAndSaveId(dbusItem, {
-                'child-added'   : Lang.bind(this, this._onRootChildAdded, shellItem),
-                'child-removed' : Lang.bind(this, this._onRootChildRemoved, shellItem),
-                'child-moved'   : Lang.bind(this, this._onRootChildMoved, shellItem),
-                'dropped'       : Lang.bind(this, this._onRootChildDropped, shellItem)
-            }, dbusItem._signals_handlers);
+        // fill the menu for the first time
+        factoryItem.getChildren().forEach(function(child) {
+            shellItem.addMenuItem(this._createItem(child));
+        }, this);
 
-            // fill the menu for the first time
-            dbusItem.get_children().forEach(function(child) {
-                shellItem.addMenuItem(this._createItem(child));
-            }, this);
-        }
+        factoryItem.setShellItem(shellItem, {
+            //'type-changed':   Lang.bind(this, this._onTypeChanged),
+            'child-added'   : Lang.bind(this, this._onChildAdded),
+            'child-moved'   : Lang.bind(this, this._onChildMoved)
+        });
+        this._menuLikend.push(factoryItem);
+        factoryItem.connectAndRemoveOnDestroy({
+            'destroy'           : Lang.bind(this, this._onDestroyMainMenu)
+        });
     },
 
-    _onRootChildDropped: function(dbusItem, shellItem) {
-        if (shellItem) {
-            this.emit("dropped", shellItem);
-        }
-    },
-
-    _onRootChildAdded: function(dbusItem, child, position, shellItem) {
-        if (shellItem) {
-            shellItem.addMenuItem(this._createItem(child), position);
-        }
-    },
-
-    _onRootChildRemoved: function(dbusItem, child, shellItem) {
-        // children like to play hide and seek
-        // but we know how to find it for sure!
-        if (shellItem) {
-            shellItem._getMenuItems().forEach(function(item) {
-                if (item._dbusItem == child)
-                    item.destroy();
-            });
-        }
-    },
-
-    _onRootChildMoved: function(dbusItem, child, oldpos, newpos, shellItem) {
-        if (shellItem) {
-            this._moveItemInMenu(shellItem, dbusItem, newpos);
-        }
-    },
-
-    _onDestroyShellMenu: function(shellItem) {
-        if (shellItem) {
-            Utility.disconnectArray(shellItem, shellItem._menuDisconnectHandlers);
-
-            let dbusItem = shellItem._dbusItem;
-            if (dbusItem) {
-                Utility.disconnectArray(dbusItem, dbusItem._signals_handlers);
-                dbusItem.destroy();
-            }
-        }
-    },
-
-    _onShellMenuOpened: function(shellItem, state) {
-        let dbusItem = shellItem._dbusItem;
-        if (!dbusItem) return;
-
-        if (state) {
-            dbusItem.handle_event("opened");
-        } else {
-            dbusItem.handle_event("closed");
-        }
+    _onDestroyMainMenu: function(factoryItem) {
+        let index = this._menuLikend.indexOf(factoryItem);
+        if (index != -1)
+            this._menuLikend.splice(index, 1);
     },
 
     _setOrnamentPolyfill: function(ornamentType, state) {
         if (ornamentType == OrnamentType.CHECK) {
             if(state) {
                 this._ornament.set_text('\u2714');
-                this.actor.add_accessible_state(Atk.StateType.CHECKED);
+                if(this.actor.add_accessible_state)
+                    this.actor.add_accessible_state(Atk.StateType.CHECKED);
             } else {
                 this._ornament.set_text('\u2752');
-                this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+                if(this.actor.remove_accessible_state)
+                    this.actor.remove_accessible_state(Atk.StateType.CHECKED);
             }
         } else if (ornamentType == OrnamentType.DOT) {
             if(state) {
                 this._ornament.set_text('\u2022');
-                this.actor.add_accessible_state(Atk.StateType.CHECKED);
+                if(this.actor.add_accessible_state)
+                    this.actor.add_accessible_state(Atk.StateType.CHECKED);
             } else {
                 this._ornament.set_text('\u274D');
-                this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+                if(this.actor.remove_accessible_state)
+                    this.actor.remove_accessible_state(Atk.StateType.CHECKED);
             }
         } else {
             this._ornament.set_text('');
-            this.actor.remove_accessible_state(Atk.StateType.CHECKED);
+            if(this.actor.remove_accessible_state)
+                this.actor.remove_accessible_state(Atk.StateType.CHECKED);
         }
     },
 
@@ -1967,21 +2759,137 @@ MenuFactory.prototype = {
         shellItem._ornament.allocate(dotBox, flags);
     },
 
-    _createItem: function(dbusItem) {
-        // first, decide whether it's a submenu or not
-        let shellItem;
-        if (dbusItem.get_children_display() == "submenu")
-            shellItem = new this.SubMenuMenuItemClass("FIXME");
-        else if (dbusItem.get_children_display() == "section")
-            shellItem = new this.MenuSectionMenuItemClass();
-        else if (dbusItem.get_type() == "separator")
-            shellItem = new this.SeparatorMenuItemClass('');
-        else
-            shellItem = new this.MenuItemClass("FIXME");
+    _createItem: function(factoryItem) {
+        // Don't allow to override previusly preasigned items, destroy the shell item first.
+        let shellItem = factoryItem.getShellItem();
+        if(shellItem) {
+            shellItem.destroy();
+        }
+        
+        shellItem = this._createShellItem(factoryItem);
+        this._hackShellItem(shellItem);
 
-        shellItem._dbusItem = dbusItem;
+        // initially create children
+        if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+            let children = factoryItem.getChildren();
+            for (let i = 0; i < children.length; ++i) {
+                let ch_item = this._createItem(children[i]);
+                shellItem.menu.addMenuItem(ch_item);
+            }
+        } else if (shellItem instanceof PopupMenu.PopupMenuSection) {
+            let children = factoryItem.getChildren();
+            for (let i = 0; i < children.length; ++i) {
+                let ch_item = this._createItem(children[i]);
+                shellItem.addMenuItem(ch_item);
+            }
+        }
+        // now, connect various events
+        factoryItem.setShellItem(shellItem, {
+            'type-changed':       Lang.bind(this, this._onTypeChanged),
+            'child-added':        Lang.bind(this, this._onChildAdded),
+            'child-moved':        Lang.bind(this, this._onChildMoved)
+        });
+        return shellItem;
+    },
 
-        if (shellItem instanceof this.MenuItemClass) {
+    _onChildAdded: function(factoryItem, child, position) {
+        let shellItem = factoryItem.getShellItem();
+        if(shellItem) {
+            if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+                shellItem.menu.addMenuItem(this._createItem(child), position, "factor");
+            } else if ((shellItem instanceof PopupMenu.PopupMenuSection) ||
+                       (shellItem instanceof PopupMenu.PopupMenu)) {
+                shellItem.addMenuItem(this._createItem(child), position);
+            } else {
+                global.logWarning("Tried to add a child to non-submenu item. Better recreate it as whole");
+                this._onTypeChanged(factoryItem);
+            }
+        } else {
+            global.logWarning("Tried to add a child shell item to non existing shell item.");
+        }
+
+    },
+
+    _onChildMoved: function(factoryItem, child, oldpos, newpos) {
+        let shellItem = factoryItem.getShellItem();
+        if(shellItem) {
+            if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+                this._moveItemInMenu(shellItem.menu, child, newpos);
+            } else if ((shellItem instanceof PopupMenu.PopupMenuSection) ||
+                       (shellItem instanceof PopupMenu.PopupMenu)) {
+                this._moveItemInMenu(shellItem, child, newpos);
+            } else {
+                global.logWarning("Tried to move a child in non-submenu item. Better recreate it as whole");
+                this._onTypeChanged(factoryItem);
+            }
+        } else {
+            global.logWarning("Tried to move a child shell item in non existing shell item.");
+        }
+    },
+
+    // If this function is apply, this mean that our old shellItem
+    // is not valid rigth now, so we can destroy it with all the deprecate
+    // submenu structure and then create again for the new factoryItem source.
+    _onTypeChanged: function(factoryItem, newShellItem) {
+        let shellItem = factoryItem.getShellItem();
+        let factoryItemParent = factoryItem.getParent();
+        let parentMenu = null;
+        if ((shellItem)&&(factoryItemParent)) {
+            let shellItemParent = factoryItemParent.getShellItem();
+            if (shellItemParent instanceof PopupMenu.PopupMenuSection)
+                parentMenu = shellItemParent;
+            else
+                parentMenu = shellItemParent.menu;
+        }
+        // first, we need to find our old position
+        let pos = -1;
+        if (parentMenu) {
+            let family = parentMenu._getMenuItems();
+            for (let i = 0; i < family.length; ++i) {
+                if (family[i] === shellItem)
+                    pos = i;
+            }
+        }
+
+        if (pos < 0) {
+            throw new Error("FactoryMenu: can't replace non existing menu item");
+        } else if (parentMenu) {
+            // create our new self if needed
+            if (!newShellItem)
+                newShellItem = this._createItem(factoryItem);
+            // add our new self while we're still alive
+            parentMenu.addMenuItem(newShellItem, pos);
+        }
+        // now destroy our old self
+        shellItem.destroy();
+    },
+
+    _moveItemInMenu: function(menu, factoryItem, newpos) {
+        // HACK: we're really getting into the internals of the PopupMenu implementation
+        // First, find our wrapper. Children tend to lie. We do not trust the old positioning.
+        let shellItem = factoryItem.getShellItem();
+        if (shellItem) {
+            let family = menu._getMenuItems();
+            for (let i = 0; i < family.length; ++i) {
+                if (family[i] == shellItem) {
+                    // now, remove it
+                    menu.box.remove_child(shellItem.actor);
+
+                    // and add it again somewhere else
+                    if (newpos < family.length && family[newpos] != shellItem)
+                        menu.box.insert_child_below(shellItem.actor, family[newpos].actor);
+                    else
+                        menu.box.add(shellItem.actor);
+
+                    // skip the rest
+                    break;
+                }
+            }
+        }
+    },
+
+    _hackShellItem: function(shellItem) {
+        if (shellItem instanceof PopupMenu.PopupMenuItem) {
             if (!shellItem.setAccel) {
                 shellItem._accel = new St.Label();
                 if (shellItem.addActor) { //GS 3.8
@@ -2003,250 +2911,118 @@ MenuFactory.prototype = {
                 shellItem._ornament = new St.Label();
                 shellItem.actor.add_actor(shellItem._ornament);
                 shellItem.setOrnament = this._setOrnamentPolyfill;
-                shellItem.actor.connect('allocate', Lang.bind(this, this._allocateOrnament, shellItem)); //GS doesn't disconnect that one, either
+                //GS doesn't disconnect that one, either
+                shellItem.actor.connect('allocate', Lang.bind(this, this._allocateOrnament, shellItem));
                 //shellItem.actor.set_margin_left(6.0);
             }
         }
-
-
-        // initialize our state
-        this._updateLabel(shellItem);
-        this._updateOrnament(shellItem);
-        this._updateAccel(shellItem);
-        this._updateImage(shellItem);
-        this._updateVisible(shellItem);
-        this._updateSensitive(shellItem);
-
-        // initially create children
-        if (shellItem instanceof this.SubMenuMenuItemClass) {
-            let children = dbusItem.get_children();
-            for (let i = 0; i < children.length; ++i) {
-                let ch_item = this._createItem(children[i]);
-                ch_item._parent = shellItem;
-                shellItem.menu.addMenuItem(ch_item);
-            }
-        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
-            let children = dbusItem.get_children();
-            for (let i = 0; i < children.length; ++i) {
-                let ch_item = this._createItem(children[i]);
-                ch_item._parent = shellItem;
-                shellItem.addMenuItem(ch_item);
-            }
-        }
-        // now, connect various events
-        Utility.connectAndRemoveOnDestroy(dbusItem, {
-            'property-changed':   Lang.bind(this, this._onPropertyChanged, shellItem),
-            'child-added':        Lang.bind(this, this._onChildAdded, shellItem),
-            'child-removed':      Lang.bind(this, this._onChildRemoved, shellItem),
-            'child-moved':        Lang.bind(this, this._onChildMoved, shellItem)
-        }, shellItem);
-
-        Utility.connectAndRemoveOnDestroy(shellItem, {
-            'activate':  Lang.bind(this, this._onActivate, shellItem)
-        });
-
-        if (shellItem.menu) {
-            Utility.connectAndRemoveOnDestroy(shellItem.menu, {
-                "open-state-changed": Lang.bind(this, this._onOpenStateChanged, shellItem)
-            });
+       /* if (shellItem.menu) { // PopupMenu.PopupMenuSection do not emit open-state-changed
             shellItem.actor.connect("button-release-event", Lang.bind(this, this._onShellMenuPreOpened));
-        }
-        return shellItem;
+        }*/
     },
 
-    _onOpenStateChanged: function(menu, open, shellItem) {
-        if (open) {
-            shellItem._dbusItem.handle_event("opened");
-        } else {
-            shellItem._dbusItem.handle_event("closed");
-        }
-    },
-
-    _onActivate: function(shellItem) {
-        let dbusItem = shellItem._dbusItem;
-        if (dbusItem) {
-            dbusItem.handle_event("clicked");
-        }
-    },
-
-    _onShellMenuPreOpened: function(actor, event) {
+    //HACK: When a submenu will open, also close all submenus in the same level. 
+   /*    _onShellMenuPreOpened: function(actor, event) {
         let shellItem = actor._delegate;
-        if ((shellItem) || (shellItem.menu)) {
-            let top_menu = this._getTopMenu(shellItem.menu);
-            if ((top_menu) && (shellItem != top_menu._openedSubMenu)) {
-                if (top_menu._openedSubMenu && top_menu._openedSubMenu.isOpen)
-                    top_menu._openedSubMenu.close(true);
-                top_menu._openedSubMenu = shellItem.menu;
+        if ((shellItem) && (shellItem.menu)) {
+           // if(!shellItem.menu.isOpen)
+           //     this._closeAllSubmenuChilds(shellItem.menu);
+            let top_menu = this._getParentMenu(shellItem);
+            this._filterParentItem(shellItem, "1");
+            if (top_menu) {
+                if (shellItem.menu != top_menu._openedSubMenu) {
+                    if (top_menu._openedSubMenu && top_menu._openedSubMenu.isOpen) {
+                        //this._closeAllSubmenuChilds(top_menu._openedSubMenu);
+                        top_menu._openedSubMenu.close(true);
+                    }
+                    top_menu._openedSubMenu = shellItem.menu;
+                }
             }
         }
     },
 
-    _onPropertyChanged: function(dbusItem, prop, value, shellItem) {
-        if (prop == "toggle-type" || prop == "toggle-state")
-            this._updateOrnament(shellItem);
-        else if (prop == "accel")
-            this._updateAccel(shellItem);
-        else if (prop == "label")
-            this._updateLabel(shellItem);
-        else if (prop == "enabled")
-            this._updateSensitive(shellItem);
-        else if (prop == "visible")
-            this._updateVisible(shellItem);
-        else if (prop == "icon-name" || prop == "icon-data")
-            this._updateImage(shellItem);
-        else if (prop == "type" || prop == "children-display")
-            this._replaceSelf(shellItem);
-        /*else
-            global.logWarning("Unhandled property change: "+prop);*/
+    _getParentMenu: function(shellItem) {
+        let parent = shellItem._parent; // We don't try to find us.
+        while (parent) {
+            if (parent instanceof PopupMenu.PopupSubMenuMenuItem)
+                return parent.menu;
+            if (parent && parent instanceof PopupMenu.PopupMenu)
+                return parent;
+            parent = parent._parent;
+            //Main.notify("parent: " + parent)
+        }
+        return null;
     },
 
-    _onChildAdded: function(dbusItem, child, position, shellItem) {
-        if (shellItem instanceof this.SubMenuMenuItemClass) {
-            shellItem.menu.addMenuItem(this._createItem(child), position);
-        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
-            shellItem.addMenuItem(this._createItem(child), position);
-        } else {
-            global.logWarning("Tried to add a child to non-submenu item. Better recreate it as whole");
-            this._replaceSelf(shellItem, dbusItem);
+    _filterParentItem: function(shellItem, pos) {
+        let parent = this._getParentItem(shellItem);
+        let isparentMenu = false;
+        let isrealparentMenu = false;
+        let isshellMenu = false;
+        if(parent != shellItem._parent) {
+            if(parent instanceof PopupMenu.PopupMenuBase)
+                isparentMenu = true;
+            if(shellItem._paren instanceof PopupMenu.PopupMenuBase)
+                isrealparentMenu = true;
+            if(shellItem instanceof PopupMenu.PopupMenuBase)
+                isshellMenu = true;
+            //Main.notify(pos + ": my " + parent + " real " + shellItem._parent + " item " + shellItem);
+            Main.notify("shell " + isshellMenu + " parent " + parent + " realparent " + isrealparentMenu);
         }
     },
 
-    _onChildRemoved: function(dbusItem, child, shellItem) {
-        if (shellItem instanceof this.SubMenuMenuItemClass) {
-            // find it!
-            shellItem.menu._getMenuItems().forEach(function(item) {
-                if (item._dbusItem == child)
-                    item.destroy();
-            });
-        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
-            shellItem._getMenuItems().forEach(function(item) {
-                if (item._dbusItem == child)
-                    item.destroy();
-            });
-        } else {
-            global.logWarning("Tried to remove a child from non-submenu item. Better recreate it as whole");
-            this._replaceSelf(shellItem, dbusItem);
-        }
-    },
-
-    _onChildMoved: function(dbusItem, child, oldpos, newpos, shellItem) {
-        if (shellItem instanceof this.SubMenuMenuItemClass) {
-            this._moveItemInMenu(shellItem.menu, child, newpos);
-        } else if (shellItem instanceof this.MenuSectionMenuItemClass) {
-            this._moveItemInMenu(shellItem, child, newpos);
-        } else {
-            global.logWarning("Tried to move a child in non-submenu item. Better recreate it as whole");
-            this._replaceSelf(shellItem, dbusItem);
-        }
-    },
-
-    _updateLabel: function(shellItem) {
-        let label = shellItem._dbusItem.get_label();
-
-        if (shellItem.label) // especially on GS3.8, the separator item might not even have a hidden label
-            shellItem.label.set_text(label);
-    },
-
-    _updateOrnament: function(shellItem) {
-        if (!shellItem.setOrnament) return; // separators and alike might not have gotten the polyfill
-        if (shellItem._dbusItem.get_toggle_type() == "checkmark") {
-            shellItem.setOrnament(OrnamentType.CHECK, shellItem._dbusItem.get_toggle_state());
-        } else if (shellItem._dbusItem.get_toggle_type() == "radio") {
-            shellItem.setOrnament(OrnamentType.DOT, shellItem._dbusItem.get_toggle_state());
-        } else {
-            shellItem.setOrnament(OrnamentType.NONE);
-        }
-    },
-
-    _updateAccel: function(shellItem) {
-        if (shellItem._accel) {
-            let accel = shellItem._dbusItem.get_accel();
-            if(accel) {
-                shellItem._accel.set_text(accel);
-            }
-        }
-    },
-
-    _updateImage: function(shellItem) {
-        if (!shellItem._icon) return; // might be missing on submenus / separators
-
-        let iconName = shellItem._dbusItem.get_icon_name();
-        if (iconName) {
-            shellItem._icon.icon_name = iconName;
-            shellItem._icon.show();
-        } else {
-            let gicon = shellItem._dbusItem.get_gdk_icon();
-            if (gicon) {
-                shellItem._icon.gicon = gicon;
-                shellItem._icon.show();
-            }
-        }
-    },
-
-    _updateVisible: function(shellItem) {
-        shellItem.actor.visible = shellItem._dbusItem.is_visible();
-    },
-
-    _updateSensitive: function(shellItem) {
-        //Cinnamon PopupMenuSection have not setSensitive
-        if (!(shellItem instanceof this.MenuSectionMenuItemClass))
-            shellItem.setSensitive(shellItem._dbusItem.is_enabled());
-    },
-
-    _replaceSelf: function(shellItem, dbusItem) {
-        // create our new self if needed
-        if (!shellItem)
-            shellItem = this._createItem(dbusItem);
-        // first, we need to find our old position
-        let pos = -1;
-        if(shellItem._parent) {
-            let family = shellItem._parent.menu._getMenuItems();
-            for (let i = 0; i < family.length; ++i) {
-                if (family[i] === shellItem)
-                    pos = i;
-            }
-        }
-
-        if (pos < 0) {
-            //throw new Error("DBusMenu: can't replace non existing menu item");
-        } else {
-            // add our new self while we're still alive
-            shellItem._parent.menu.addMenuItem(shellItem, pos);
-            // now destroy our old self
-            shellItem.destroy();
-        }
-    },
-
-    _getTopMenu: function(shellItem) {
-        let actor = shellItem.actor;
+    _getParentItem: function(shellItem) {
+        let actor = shellItem.actor.get_parent(); // We don't try to find us.
         while (actor) {
-            if ((actor._delegate) && (actor._delegate instanceof PopupMenu.PopupMenu))
-               return actor._delegate;
-            actor = actor.get_parent();
-       }
-       return null;
-   },
+            if (actor._delegate) { 
+                // actor._delegate.sourceActor._delegate will be also a SubMenuMenuItemClass,
+                // but sourceActor could not be asigned on a non standar Cinnamon Class.
+                // explore the childs instead will be better.
 
-    _moveItemInMenu: function(menu, dbusItem, newpos) {
-        //HACK: we're really getting into the internals of the PopupMenu implementation
+                // The non standar menu need to be at less, a child of the PopupMenuBase implementation.
+                if (actor._delegate instanceof PopupMenu.PopupMenuBase) {
+                    //let items = actor._delegate.box.getChildren().map(Lang.bind(this, function (child) {
+                    //    return child._delegate;
+                    //}));
+                    let items = actor._delegate._getMenuItems();
+                    //Find us to be sure
+                    for(let pos in items) {
+                        if (items[pos] == shellItem)
+                            return actor._delegate;
+                    }
+                }
 
-        // First, find our wrapper. Children tend to lie. We do not trust the old positioning.
-        let family = menu._getMenuItems();
-        for (let i = 0; i < family.length; ++i) {
-            if (family[i]._dbusItem == dbusItem) {
-                // now, remove it
-                menu.box.remove_child(family[i].actor);
-
-                // and add it again somewhere else
-                if (newpos < family.length && family[newpos] != family[i])
-                    menu.box.insert_child_below(family[i].actor, family[newpos].actor);
-                else
-                    menu.box.add(family[i].actor);
-
-                // skip the rest
-                return;
             }
+            actor = actor.get_parent();
         }
+        return null;
+    },
+    // We don't try to find the first parent menu container of the shellItem,
+    // what is intresting is the first menu/submenu container the we support.
+    _getParentMenu: function(shellItem) {
+        let actor = shellItem.actor.get_parent(); // We don't try to find us.
+        while (actor) {
+            if (actor._delegate) { 
+                // actor._delegate.sourceActor._delegate will be also a SubMenuMenuItemClass,
+                // but sourceActor could not be asigned on a non standar Cinnamon Class.
+                // explore the childs instead will be better.
+
+                // The non standar menu need to be at less, a child of the PopupMenuBase implementation.
+                if (actor._delegate instanceof PopupMenu.PopupMenuBase) {
+                    let items = actor._delegate._getMenuItems();
+                    for(let pos in items) {
+                        // We ommited the any type of SubMenuMenuItem instance that we not create.
+                        if (items[pos] instanceof PopupMenu.PopupSubMenuMenuItem)
+                            return items[pos].menu;
+                    }
+                }
+                if (actor._delegate instanceof PopupMenu.PopupMenu) {
+                    return actor._delegate;
+                }
+            }
+            actor = actor.get_parent();
+        }
+        return null;
     }
+*/
 };
-Signals.addSignalMethods(MenuFactory.prototype);

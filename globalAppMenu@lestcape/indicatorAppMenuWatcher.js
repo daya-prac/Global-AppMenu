@@ -118,6 +118,91 @@ IndicatorAppMenuWatcher.prototype = {
         //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
     },
 
+    /*
+        this._cinnamonwm = global.window_manager;
+        this._cinnamonwm.connect('minimize', Lang.bind(this, this._minimizeWindow));
+        this._cinnamonwm.connect('maximize', Lang.bind(this, this._maximizeWindow));
+        //this._cinnamonwm.connect('unmaximize', Lang.bind(this, this._unmaximizeWindow));
+        this._cinnamonwm.connect('tile', Lang.bind(this, this._maximizeWindow));
+        this._last_wind = null;
+    _minimizeWindow: function(cinnamonwm, actor) {
+      // Main.notify("minimize")
+    },
+
+    _maximizeWindow: function(cinnamonwm, actor) {
+        try {
+        log("enter _maximizeWindow");
+        let xid = this._guess_window_xid(global.display.focus_window);
+        if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
+           //if(this._last_wind)
+           //    this._last_wind.unmaximize();
+           let screen = Gdk.Screen.get_default();
+           let gdk_win = screen.get_active_window();
+           if (gdk_win) {
+               gdk_win.set_decorations(Gdk.WMDecoration.BORDER);
+               let [x, y] = gdk_win.get_position();
+               //gdk_win.move_resize(0, 0, gdk_win.get_width() + x, gdk_win.get_height() + y);
+               this._last_wind_w = gdk_win.get_width();
+               this._last_wind_h = gdk_win.get_height();
+               this._last_wind_x = x;
+               this._last_wind_y = y;
+               gdk_win.move(0,0);
+               gdk_win.resize(this._last_wind_w + x, this._last_wind_h + y);
+               //gdk_win.process_all_updates();
+               //gdk_win.resize(this._last_wind_x, this._last_wind_y);
+               //global.gdk_screen.get_display().sync();
+               gdk_win.unref();
+              // gdk_win.show();
+
+               //Main.notify("maximize");
+           }
+           this.oldFullscreenPref = Meta.prefs_get_force_fullscreen();
+           Meta.prefs_set_force_fullscreen(false);
+        }
+        } catch(e) {Main.notify("er1 " + e.message)}
+    },
+
+    _unmaximizeWindow : function(cinnamonwm, actor) {
+        try {
+        log("enter _unmaximizeWindow");
+        let xid = this._guess_window_xid(global.display.focus_window);
+        if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
+           let screen = Gdk.Screen.get_default();
+           let gdk_win = screen.get_active_window();
+           if (gdk_win) {
+              gdk_win.set_decorations(Gdk.WMDecoration.ALL);
+              
+              //gdk_win.process_all_updates();
+              gdk_win.unref();
+              //global.gdk_screen.get_display().sync();
+           }
+           Meta.prefs_set_force_fullscreen(this.oldFullscreenPref);
+        }
+        } catch(e) {Main.notify("er1 " + e.message)}
+    },
+
+    _list_meta: function(xid) {
+        //if(actor.meta_window.get_window_type() == Meta.WindowType.NORMAL)
+        //[ok, decorations] = gdk_win.get_decorations();
+        //actor.get_meta_window();
+        ///Meta.enable_unredirect_for_screen(global.screen);
+        ///Meta.disable_unredirect_for_screen(global.screen);
+        //let windows = [];
+        //let windowActors = global.get_window_actors();
+        //for (let i in windowActors) {
+            //Main.notify(""+windowActors[i])
+        //    windows.push(windowActors[i].get_meta_window());
+            //Main.notify(""+windowActors[i].get_meta_window().get_wm_class())  the app name.
+        //}
+        //let att_id = GdkX11.x11_get_xatom_by_name("_MOTIF_WM_HINTS");
+        //let atom = GdkX11.x11_xatom_to_atom(att_id);
+        //let atom = Gdk.Atom.intern("_MOTIF_WM_HINTS", false);
+        //Main.notify("eso  " + atom);
+        //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " +
+        //  GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
+    },
+    */
+
     _acquiredName: function() {
         this._everAcquiredName = true;
         global.log(logName + "Acquired name " + WATCHER_INTERFACE);
@@ -229,15 +314,23 @@ IndicatorAppMenuWatcher.prototype = {
             //GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, this._list_meta, xid));
             //this._list_meta(xid);
             let root = client.get_root();
-            root.connect("dropped", Lang.bind(this, this._on_menu_dropped, xid));
+            root.connectAndRemoveOnDestroy({
+                'childs-empty'   : Lang.bind(this, this._on_menu_empty, xid),
+                'destroy'        : Lang.bind(this, this._on_menu_destroy, xid)
+            });
         }
     }, //global->ibus_window
 
-    _on_menu_dropped: function(root, xid) {
+    _on_menu_empty: function(root, xid) {
+        //we don't have alternatives now, so destroy the appmenu.
+        this._on_menu_destroy(root, xid);
+    },
+
+    _on_menu_destroy: function(root, xid) {
         if((xid) && (xid in this._registered_windows)) {
-            let menu = this._registered_windows[xid].appMenu;
-            if(menu) menu.destroy();
+            let appMenu = this._registered_windows[xid].appMenu;
             this._registered_windows[xid].appMenu = null;
+            if(appMenu) appMenu.destroy();
             this.EmitWindowUnregistered(parseInt(xid));
             if(this._last_xid == xid)
                 this.emit('on_appmenu_changed', this._registered_windows[xid].window);
@@ -314,6 +407,8 @@ IndicatorAppMenuWatcher.prototype = {
         }
         for (let xid in this._registered_windows) {
             if(current.indexOf(xid) == -1) {
+                //Main.notify("es " + xid);
+                //Main.notify("es " + this._registered_windows[xid].application.get_name());
                 if(this._registered_windows[xid].appMenu)
                     this._registered_windows[xid].appMenu.destroy();
                 delete this._registered_windows[xid];
@@ -327,8 +422,9 @@ IndicatorAppMenuWatcher.prototype = {
             for (let xid in this._registered_windows) {
                 this._update_icon(xid);
             }
-            if(this._last_xid)
+            if(this._last_xid) {
                 this.emit('on_appmenu_changed', this._registered_windows[this._last_xid].window);
+            }
         }
     },
 
@@ -396,6 +492,17 @@ IndicatorAppMenuWatcher.prototype = {
                 this._registered_windows[xid].application = appT;
             if(wind)
                 this._registered_windows[xid].window = wind;
+            /*
+            if(this._registered_windows[xid].menubarObjectPath == "")
+                this._registered_windows[xid].menubarObjectPath = menubarPath;
+            if(this._registered_windows[xid].appmenuObjectPath == "")
+                this._registered_windows[xid].appmenuObjectPath = appmenuPath;
+            if(this._registered_windows[xid].sender == "")
+                this._registered_windows[xid].sender = sender_dbus;
+            if(!this._registered_windows[xid].application)
+                this._registered_windows[xid].application = appT;
+            if(!this._registered_windows[xid].window)
+                this._registered_windows[xid].window = wind;*/
         } else {
             this._registered_windows[xid] = {
                 window: wind,
@@ -461,8 +568,11 @@ IndicatorAppMenuWatcher.prototype = {
 
     get_menu_for_window: function(wind) {
         let xid = this._guess_window_xid(wind);
-        if((xid) && (xid in this._registered_windows))
-            return this._registered_windows[xid].appMenu;
+        if((xid) && (xid in this._registered_windows)) {
+            let appmenu = this._registered_windows[xid].appMenu;
+            if (appmenu)
+                return appmenu.get_root();
+        }
         return null;
     },
 
@@ -580,7 +690,7 @@ IndicatorAppMenuWatcher.prototype = {
             }
         }
         // debugging for when people find bugs..
-        log("[maximus]: Could not find XID for window with title %s".format(wind.title));
+        global.logError("[maximus]: Could not find XID for window with title %s".format(wind.title));
         return null;
     }
 };

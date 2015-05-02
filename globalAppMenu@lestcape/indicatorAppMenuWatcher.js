@@ -409,9 +409,10 @@ IndicatorAppMenuWatcher.prototype = {
             if(current.indexOf(xid) == -1) {
                 //Main.notify("es " + xid);
                 //Main.notify("es " + this._registered_windows[xid].application.get_name());
-                if(this._registered_windows[xid].appMenu)
-                    this._registered_windows[xid].appMenu.destroy();
+                let appMenu = this._registered_windows[xid].appMenu;
                 delete this._registered_windows[xid];
+                if(appMenu)
+                    appMenu.destroy();
             }
         }
     },

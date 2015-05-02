@@ -654,7 +654,7 @@ ConfigurableMenu.prototype = {
          this._scroll.add_actor(this.box);
 
          this.actor = this._scroll;
-         this.setFloatingState(floating == true);
+
 
          this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
 
@@ -663,11 +663,10 @@ ConfigurableMenu.prototype = {
          global.focus_manager.add_group(this.actor);
          this.actor.reactive = false;
          this.actor.hide();//.contains
-         if(launcher) {
-            if(!this._menuManager)
-               this._menuManager = new PopupMenu.PopupMenuManager(launcher);
-            this.setLauncher(launcher);
-         }
+         if(!this._menuManager)
+            this._menuManager = new PopupMenu.PopupMenuManager(launcher);
+         //Init the launcher and the floating state.
+         this.setFloatingState(floating == true, launcher);
       } catch(e) {
          Main.notify("ErrorMenuCreation", e.message);
       }
@@ -1411,9 +1410,6 @@ ConfigurableMenu.prototype = {
       let parent = this._scroll.get_parent();
       if(parent != null)
           parent.remove_actor(this._scroll);
-      parent = this._boxPointer.actor.get_parent();
-      if((parent != null)&&(parent != Main.uiGroup))
-         parent.remove_actor(this._boxPointer.actor);
     },
 
     _needsScrollbar: function() {
@@ -1444,7 +1440,8 @@ ConfigurableMenu.prototype = {
          this.fixedPointer = 0;
          this._releaseActorState();
          this.actor = this._scroll;
-         this._boxPointer.actor.destroy();
+         //this._boxWrapper.add_actor(this._scroll);
+         //this.actor = this._boxPointer.actor;
          if(this.subMenu) {
             this.subMenu.close();
             this.subMenu.destroy();
@@ -1453,6 +1450,7 @@ ConfigurableMenu.prototype = {
          if(this._menuManager)
             this._menuManager.removeMenu(this);
          PopupMenu.PopupMenuBase.prototype.destroy.call(this);
+         this._boxPointer.actor.destroy();
       }
    }
 };
@@ -1732,7 +1730,7 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
       //this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));*/
    },
 
-   setSubMenuFloating: function (floating) {
+   setSubMenuFloating: function(floating) {
       if(floating) {
          this._floating = floating;
          if(!this.topMenu)
@@ -1744,7 +1742,7 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
    },
 
    _subMenuOpenStateChanged: function(menu, open) {
-      if(state) this.actor.add_style_pseudo_class('open');
+      if(open) this.actor.add_style_pseudo_class('open');
       else this.actor.remove_style_pseudo_class('open');
       if((!this._hide_expander)&&(!this._floating)) {
          if(menu.isOpen) {
@@ -1830,7 +1828,8 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
 
    _getTopMenu: function(actor) {
       while(actor) {
-         if((actor._delegate) && (actor.get_parent() == Main.uiGroup))//(actor._delegate instanceof PopupMenu.PopupMenu))
+         if((actor._delegate) && ((actor.get_parent() == Main.uiGroup)||
+            (actor._delegate instanceof ConfigurableMenuApplet)))
             return actor._delegate;
          actor = actor.get_parent();
       }
@@ -2047,7 +2046,7 @@ ConfigurableMenuApplet.prototype = {
 
    _setMenuInPosition: function(menuItem) {
       if(this._floating) {
-         menuItem.menu.setFloatingState(true, menuItem);
+         menuItem.setSubMenuFloating(true);
          menuItem.menu.setArrowSide(this._orientation);
          menuItem._triangle.hide();
          menuItem._icon.hide();
@@ -2426,9 +2425,8 @@ PopupMenuAbstractFactory.prototype = {
         if(factoryItem) {
             let shellItem = factoryItem.getShellItem();
             //If our item is previusly asigned, so destroy first the shell item.
-            if(shellItem) {
+            if(shellItem)
                 shellItem.destroy();
-            }
             factoryItem.setParent(this);
             this._children_ids.splice(pos, 0, child_id);
             this.emit('child-added', factoryItem, pos);
@@ -2587,7 +2585,7 @@ PopupMenuAbstractFactory.prototype = {
 
     _onShellMenuDestroyed: function(shellMenu) {
         if (this._shellMenuDestroyId > 0) {
-            shellMenu.disconnect(this._shellMenuDestroyId);
+            this.shellItem.disconnect(this._shellMenuDestroyId);
             this._shellMenuDestroyId = 0;
         }
         if (this._shell_menu_signals_handlers) {
@@ -2597,10 +2595,8 @@ PopupMenuAbstractFactory.prototype = {
     },
 
     destroy: function() {
-       if (this.shellItem) {
+       if (this.shellItem)
            this.shellItem.destroy();
-           this.shellItem = null;
-       }
        this.emit("destroy");
        // Emit the destroy first, to allow know to external lisener,
        // then, disconnect the lisener handler.
@@ -2763,9 +2759,8 @@ MenuFactory.prototype = {
     _createItem: function(factoryItem) {
         // Don't allow to override previusly preasigned items, destroy the shell item first.
         let shellItem = factoryItem.getShellItem();
-        if(shellItem) {
+        if(shellItem)
             shellItem.destroy();
-        }
         
         shellItem = this._createShellItem(factoryItem);
         this._hackShellItem(shellItem);
@@ -2831,7 +2826,7 @@ MenuFactory.prototype = {
     // If this function is apply, this mean that our old shellItem
     // is not valid rigth now, so we can destroy it with all the deprecate
     // submenu structure and then create again for the new factoryItem source.
-    _onTypeChanged: function(factoryItem, newShellItem) {
+    _onTypeChanged: function(factoryItem) {
         let shellItem = factoryItem.getShellItem();
         let factoryItemParent = factoryItem.getParent();
         let parentMenu = null;
@@ -2855,14 +2850,12 @@ MenuFactory.prototype = {
         if (pos < 0) {
             throw new Error("FactoryMenu: can't replace non existing menu item");
         } else if (parentMenu) {
-            // create our new self if needed
-            if (!newShellItem)
-                newShellItem = this._createItem(factoryItem);
+            let newShellItem = this._createItem(factoryItem);
             // add our new self while we're still alive
             parentMenu.addMenuItem(newShellItem, pos);
+            // now destroy our old self
+            shellItem.destroy();
         }
-        // now destroy our old self
-        shellItem.destroy();
     },
 
     _moveItemInMenu: function(menu, factoryItem, newpos) {

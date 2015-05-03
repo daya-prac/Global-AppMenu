@@ -598,7 +598,7 @@ ConfigurableMenu.prototype = {
 
          this.effectType = "none";
          this.effectTime = 0.4;
-         this._automatic_open_control = true;
+         this._automatic_open_control = false;
          this._paint_id = 0;
          this._paint_count = 0;
          this._reactive = true;
@@ -654,8 +654,6 @@ ConfigurableMenu.prototype = {
          this._scroll.add_actor(this.box);
 
          this.actor = this._scroll;
-
-
          this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));
 
          this.actor.add_style_class_name('popup-menu');
@@ -1399,7 +1397,12 @@ ConfigurableMenu.prototype = {
       if (top_menu) {
          if ((top_menu._openedSubMenu)&&(this != top_menu._openedSubMenu)&&
             (top_menu._openedSubMenu.isOpen)&&(this.isOpen)) {
+            // We probably need to do that on a better place to
+            // be apply to all possible configuration. Rigth now
+            // this fix the problem.
+            top_menu.actor.grab_key_focus();
             top_menu._openedSubMenu.close(true);
+            top_menu._openedSubMenu = null;
          }
          if (this.isOpen)
             top_menu._openedSubMenu = this;
@@ -2048,6 +2051,7 @@ ConfigurableMenuApplet.prototype = {
       if(this._floating) {
          menuItem.setSubMenuFloating(true);
          menuItem.menu.setArrowSide(this._orientation);
+         menuItem.menu.setAutomaticOpenControl(true);
          menuItem._triangle.hide();
          menuItem._icon.hide();
          let currentWidth = menuItem.label.width - menuItem.label.get_margin_left() - menuItem.label.get_margin_right();

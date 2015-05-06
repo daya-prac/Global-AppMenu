@@ -32,37 +32,36 @@ function MyMenuFactory() {
 }
 
 MyMenuFactory.prototype = {
-    __proto__: ConfigurableMenus.MenuFactory.prototype,
+   __proto__: ConfigurableMenus.MenuFactory.prototype,
 
-    _init: function() {
-        ConfigurableMenus.MenuFactory.prototype._init.call(this);
-    },
+   _init: function() {
+      ConfigurableMenus.MenuFactory.prototype._init.call(this);
+      this.menuLayout = "expanded";
+   },
 
-/*   RootMenuClass: Applet.AppletPopupMenu,
-     MenuItemClass: PopupMenu.PopupMenuItem,
-     SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
-     MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
-     SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
-*/
-
-    _createShellItem: function(factoryItem, launcher, orientation) {
-        // Decide whether it's a submenu or not
-        let shellItem = null;
-        let item_type = factoryItem.getFactoryType();
-        if (item_type == ConfigurableMenus.FactoryClassTypes.RootMenuClass)
-            shellItem = new ConfigurableMenus.ConfigurableMenuApplet(launcher, orientation);
-        if (item_type == ConfigurableMenus.FactoryClassTypes.SubMenuMenuItemClass)
-            shellItem = new ConfigurableMenus.ConfigurablePopupSubMenuMenuItem("FIXME");
-        else if (item_type == ConfigurableMenus.FactoryClassTypes.MenuSectionMenuItemClass)
-            shellItem = new PopupMenu.PopupMenuSection();
-        else if (item_type == ConfigurableMenus.FactoryClassTypes.SeparatorMenuItemClass)
-            shellItem = new PopupMenu.PopupSeparatorMenuItem('');
-        else if(item_type == ConfigurableMenus.FactoryClassTypes.MenuItemClass)
-            shellItem = new ConfigurableMenus.ConfigurableApplicationMenuItem("FIXME");
-        //else
-        //    throw new TypeError('Trying to instantiate a shell item with an invalid factory type');
-        return shellItem;
-    }
+   // RootMenuClass: Applet.AppletPopupMenu,
+   // MenuItemClass: PopupMenu.PopupMenuItem,
+   // SubMenuMenuItemClass: PopupMenu.PopupSubMenuMenuItem,
+   // MenuSectionMenuItemClass: PopupMenu.PopupMenuSection,
+   // SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
+   _createShellItem: function(factoryItem, launcher, orientation, menuManager) {
+      // Decide whether it's a submenu or not
+      let shellItem = null;
+      let item_type = factoryItem.getFactoryType();
+      if (item_type == ConfigurableMenus.FactoryClassTypes.RootMenuClass)
+         shellItem = new ConfigurableMenus.ConfigurableMenuApplet(launcher, orientation, menuManager);
+      if (item_type == ConfigurableMenus.FactoryClassTypes.SubMenuMenuItemClass)
+         shellItem = new ConfigurableMenus.ConfigurablePopupSubMenuMenuItem("FIXME");
+      else if (item_type == ConfigurableMenus.FactoryClassTypes.MenuSectionMenuItemClass)
+         shellItem = new ConfigurableMenus.ConfigurablePopupMenuSection();
+      else if (item_type == ConfigurableMenus.FactoryClassTypes.SeparatorMenuItemClass)
+         shellItem = new PopupMenu.PopupSeparatorMenuItem('');
+      else if(item_type == ConfigurableMenus.FactoryClassTypes.MenuItemClass)
+         shellItem = new ConfigurableMenus.ConfigurableApplicationMenuItem("FIXME");
+      //else
+      //    throw new TypeError('Trying to instantiate a shell item with an invalid factory type');
+      return shellItem;
+   }
 };
 
 function MyApplet(metadata, orientation, panel_height, instance_id) {
@@ -118,12 +117,14 @@ MyApplet.prototype = {
                     //newMenu = dbus_menu.getShellItem();
                     newMenu = this.menuFactory.getShellMenu(dbus_menu);
                     if(!newMenu) {
-                        //let menuManager = new PopupMenu.PopupMenuManager(this);
-                        newMenu = this.menuFactory.buildShellMenu(dbus_menu, this, this.orientation);
+                        let menuManager = new ConfigurableMenus.ConfigurableMenuManager(this);
+                        newMenu = this.menuFactory.buildShellMenu(dbus_menu, this, this.orientation, menuManager);
                     }
+
                 }
             }
         }
+
         this._try_to_show(newLabel, newIcon, newMenu);
 
       }catch(e){Main.notify("Errors", e.message);}

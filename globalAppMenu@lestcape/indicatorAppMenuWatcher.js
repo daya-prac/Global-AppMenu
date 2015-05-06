@@ -18,7 +18,7 @@ const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Cinnamon = imports.gi.Cinnamon;
 //const Gtk = imports.gi.Gtk;
-//const Gdk = imports.gi.Gdk;
+const Gdk = imports.gi.Gdk;
 //const GdkX11 = imports.gi.GdkX11; 
 
 const Lang = imports.lang;
@@ -117,14 +117,16 @@ IndicatorAppMenuWatcher.prototype = {
         //Main.notify("eso  " + atom);
         //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
     },
+/*
 
-    /*
         this._cinnamonwm = global.window_manager;
         this._cinnamonwm.connect('minimize', Lang.bind(this, this._minimizeWindow));
         this._cinnamonwm.connect('maximize', Lang.bind(this, this._maximizeWindow));
-        //this._cinnamonwm.connect('unmaximize', Lang.bind(this, this._unmaximizeWindow));
+        this._cinnamonwm.connect('unmaximize', Lang.bind(this, this._unmaximizeWindow));
         this._cinnamonwm.connect('tile', Lang.bind(this, this._maximizeWindow));
         this._last_wind = null;
+    },
+
     _minimizeWindow: function(cinnamonwm, actor) {
       // Main.notify("minimize")
     },
@@ -136,7 +138,8 @@ IndicatorAppMenuWatcher.prototype = {
         if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
            //if(this._last_wind)
            //    this._last_wind.unmaximize();
-           let screen = Gdk.Screen.get_default();
+           //let screen = Gdk.Screen.get_default();
+           let screen = global.gdk_screen;
            let gdk_win = screen.get_active_window();
            if (gdk_win) {
                gdk_win.set_decorations(Gdk.WMDecoration.BORDER);
@@ -148,16 +151,16 @@ IndicatorAppMenuWatcher.prototype = {
                this._last_wind_y = y;
                gdk_win.move(0,0);
                gdk_win.resize(this._last_wind_w + x, this._last_wind_h + y);
-               //gdk_win.process_all_updates();
+               gdk_win.process_all_updates();
                //gdk_win.resize(this._last_wind_x, this._last_wind_y);
                //global.gdk_screen.get_display().sync();
-               gdk_win.unref();
+               //gdk_win.unref();
               // gdk_win.show();
 
                //Main.notify("maximize");
            }
-           this.oldFullscreenPref = Meta.prefs_get_force_fullscreen();
-           Meta.prefs_set_force_fullscreen(false);
+           //this.oldFullscreenPref = Meta.prefs_get_force_fullscreen();
+           //Meta.prefs_set_force_fullscreen(false);
         }
         } catch(e) {Main.notify("er1 " + e.message)}
     },
@@ -167,21 +170,22 @@ IndicatorAppMenuWatcher.prototype = {
         log("enter _unmaximizeWindow");
         let xid = this._guess_window_xid(global.display.focus_window);
         if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
-           let screen = Gdk.Screen.get_default();
+           //let screen = Gdk.Screen.get_default();
+           let screen = global.gdk_screen;
            let gdk_win = screen.get_active_window();
            if (gdk_win) {
               gdk_win.set_decorations(Gdk.WMDecoration.ALL);
-              
-              //gdk_win.process_all_updates();
-              gdk_win.unref();
+              gdk_win.process_all_updates();
+              //gdk_win.unref();
               //global.gdk_screen.get_display().sync();
            }
-           Meta.prefs_set_force_fullscreen(this.oldFullscreenPref);
+           //Meta.prefs_set_force_fullscreen(this.oldFullscreenPref);
         }
         } catch(e) {Main.notify("er1 " + e.message)}
     },
 
     _list_meta: function(xid) {
+        //global->ibus_window
         //if(actor.meta_window.get_window_type() == Meta.WindowType.NORMAL)
         //[ok, decorations] = gdk_win.get_decorations();
         //actor.get_meta_window();
@@ -311,15 +315,13 @@ IndicatorAppMenuWatcher.prototype = {
             }
             if (this._guess_window_xid(global.display.focus_window) == xid)
                 this._on_window_changed();
-            //GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, this._list_meta, xid));
-            //this._list_meta(xid);
             let root = client.get_root();
             root.connectAndRemoveOnDestroy({
                 'childs-empty'   : Lang.bind(this, this._on_menu_empty, xid),
                 'destroy'        : Lang.bind(this, this._on_menu_destroy, xid)
             });
         }
-    }, //global->ibus_window
+    },
 
     _on_menu_empty: function(root, xid) {
         //we don't have alternatives now, so destroy the appmenu.
@@ -335,24 +337,6 @@ IndicatorAppMenuWatcher.prototype = {
             if(this._last_xid == xid)
                 this.emit('on_appmenu_changed', this._registered_windows[xid].window);
         }
-    },
-
-    _list_meta: function(xid) {
-        /*Main.notify("begin " + xid)
-        let window = GdkX11.X11Window.foreign_new_for_display( Gdk.Display.get_default(), xid );
-        [ok, decorations] = window.get_decorations();
-        Main.notify("begin " + ok + " " + decorations)
-        let windows = [];
-        let windowActors = global.get_window_actors();
-        for (let i in windowActors) {
-            //Main.notify(""+windowActors[i])
-            windows.push(windowActors[i].get_meta_window());
-            //Main.notify(""+windowActors[i].get_meta_window().get_wm_class())  the app name.
-        }*/
-        //let window = GdkX11.X11Window.foreign_new_for_display( Gdk.Display.get_default(), xid );
-        // remove decorations
-        //if(window)
-        //   window.set_decorations(0);
     },
 
     _validateMenu: function(bus, path, callback) {

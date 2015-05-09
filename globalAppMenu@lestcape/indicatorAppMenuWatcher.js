@@ -117,8 +117,8 @@ IndicatorAppMenuWatcher.prototype = {
         //Main.notify("eso  " + atom);
         //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " + GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
     },
-/*
 
+/*
         this._cinnamonwm = global.window_manager;
         this._cinnamonwm.connect('minimize', Lang.bind(this, this._minimizeWindow));
         this._cinnamonwm.connect('maximize', Lang.bind(this, this._maximizeWindow));
@@ -138,8 +138,8 @@ IndicatorAppMenuWatcher.prototype = {
         if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
            //if(this._last_wind)
            //    this._last_wind.unmaximize();
-           //let screen = Gdk.Screen.get_default();
-           let screen = global.gdk_screen;
+           let screen = Gdk.Screen.get_default();
+           //let screen = global.gdk_screen;
            let gdk_win = screen.get_active_window();
            if (gdk_win) {
                gdk_win.set_decorations(Gdk.WMDecoration.BORDER);
@@ -151,13 +151,13 @@ IndicatorAppMenuWatcher.prototype = {
                this._last_wind_y = y;
                gdk_win.move(0,0);
                gdk_win.resize(this._last_wind_w + x, this._last_wind_h + y);
-               gdk_win.process_all_updates();
+               //gdk_win.process_all_updates();
                //gdk_win.resize(this._last_wind_x, this._last_wind_y);
                //global.gdk_screen.get_display().sync();
-               //gdk_win.unref();
+               gdk_win.unref();
               // gdk_win.show();
-
-               //Main.notify("maximize");
+              // GLib.spawn_command_line_async('/home/lestcape/.local/share/cinnamon/applets/globalAppMenu@lestcape/windowsUpdater.py %s false'.format(xid));
+               Main.notify("maximize" + xid);
            }
            //this.oldFullscreenPref = Meta.prefs_get_force_fullscreen();
            //Meta.prefs_set_force_fullscreen(false);
@@ -170,14 +170,16 @@ IndicatorAppMenuWatcher.prototype = {
         log("enter _unmaximizeWindow");
         let xid = this._guess_window_xid(global.display.focus_window);
         if((xid in this._registered_windows)) {//&&(this._registered_windows[xid].appmenu)) {
-           //let screen = Gdk.Screen.get_default();
-           let screen = global.gdk_screen;
+           let screen = Gdk.Screen.get_default();
+           //let screen = global.gdk_screen;
            let gdk_win = screen.get_active_window();
            if (gdk_win) {
               gdk_win.set_decorations(Gdk.WMDecoration.ALL);
-              gdk_win.process_all_updates();
-              //gdk_win.unref();
+              //gdk_win.process_all_updates();
+              gdk_win.unref();
               //global.gdk_screen.get_display().sync();
+              //GLib.spawn_command_line_async('/home/lestcape/.local/share/cinnamon/applets/globalAppMenu@lestcape/windowsUpdater.py %s true'.format(xid));
+              Main.notify("unmaximize" + xid);
            }
            //Meta.prefs_set_force_fullscreen(this.oldFullscreenPref);
         }
@@ -205,8 +207,7 @@ IndicatorAppMenuWatcher.prototype = {
         //log("Enviroment values: " + GLib.getenv('GTK_MODULES') + " " +
         //  GLib.getenv('UBUNTU_MENUPROXY') + " " + gtk_settings.gtk_shell_shows_menubar);
     },
-    */
-
+*/
     _acquiredName: function() {
         this._everAcquiredName = true;
         global.log(logName + "Acquired name " + WATCHER_INTERFACE);

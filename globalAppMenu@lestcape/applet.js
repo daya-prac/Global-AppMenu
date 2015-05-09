@@ -16,11 +16,15 @@
 
 const St = imports.gi.St;
 const Lang = imports.lang;
+const Clutter = imports.gi.Clutter;
+const Pango = imports.gi.Pango;
+const Cairo = imports.cairo;
 
 const Applet = imports.ui.applet;
 const Main = imports.ui.main;
 const Settings = imports.ui.settings;
 const PopupMenu = imports.ui.popupMenu;
+
 
 const AppletPath = imports.ui.appletManager.applets['globalAppMenu@lestcape'];
 const IndicatorAppMenuWatcher = AppletPath.indicatorAppMenuWatcher;
@@ -64,6 +68,93 @@ MyMenuFactory.prototype = {
    }
 };
 
+function GradientLabel() {
+   this._init.apply(this, arguments);
+}
+
+GradientLabel.prototype = {
+   _init: function(text, size) {
+      this.text = text;
+      this.size = size;
+
+      this.actor = new St.Bin();
+      //this.actor.add_effect_with_name("curl", new Clutter.BlurEffect());
+      this._drawingArea = new St.DrawingArea({ style_class: 'applet-label' });
+      this._drawingArea.connect('repaint', Lang.bind(this, this._onRepaint));
+      this._drawingArea.connect('style-changed', Lang.bind(this, this._onStyleChanged));
+      this.actor.set_child(this._drawingArea);
+      this.margin = 2;
+   },
+
+   set_text: function(text) {
+      this.text = text;
+      this._updateSize();
+   },
+
+   set_text: function(text) {
+      this.text = text;
+      this._updateSize();
+   },
+
+   _onStyleChanged: function() {
+      this.themeNode = this._drawingArea.get_theme_node();
+      this._updateSize();
+   },
+
+   _updateSize: function() {
+      if(this.themeNode) {
+         let font    = this.themeNode.get_font();
+         let context = this._drawingArea.get_pango_context();
+         let metrics = context.get_metrics(font, context.get_language());
+         let width   = Math.min(this.size, this.text.length) * metrics.get_approximate_char_width() / Pango.SCALE;
+         let height  =  font.get_size() / Pango.SCALE;
+         this._drawingArea.set_width(width);
+         this._drawingArea.set_height(height + 2*this.margin);
+      }
+   },
+
+   _onRepaint: function(area) {
+      try {
+      let cr = area.get_context();
+      let [width, height] = area.get_surface_size();
+
+      let resultText = this.text.substring(0, Math.min(this.size, this.text.length));
+
+      let font = this.themeNode.get_font();
+      let context = this._drawingArea.get_pango_context();
+      let metrics = context.get_metrics(font, context.get_language());
+      let fontSize = height - 2*this.margin;
+      let startColor = this.themeNode.get_color('color');
+
+      let weight = Cairo.FontWeight.NORMAL;
+      if(font.get_weight() >= 700)
+        weight = Cairo.FontWeight.BOLD;
+      cr.selectFontFace(font.get_family(), Cairo.FontSlant.NORMAL, weight);
+      cr.moveTo(0, height/2 + (metrics.get_descent()/Pango.SCALE) + 1);
+      cr.setFontSize(fontSize);
+
+      let shadowPattern = new Cairo.LinearGradient(0, 0, width, height);
+      shadowPattern.addColorStopRGBA(0, 0, 0, 0, 1);
+      shadowPattern.addColorStopRGBA(1, 0, 0, 0, 0);
+      cr.setSource(shadowPattern);
+
+      cr.showText(resultText);
+      cr.fill();
+
+      cr.moveTo(1, height/2 + (metrics.get_descent()/Pango.SCALE) + 1);
+      cr.setFontSize(fontSize);
+      let realPattern = new Cairo.LinearGradient(0, 0, width, height);
+      realPattern.addColorStopRGBA(0, startColor.red / 255, startColor.green / 255, startColor.blue / 255, startColor.alpha / 255);
+      realPattern.addColorStopRGBA(0.5, startColor.red / 255, startColor.green / 255, startColor.blue / 255, startColor.alpha / 255);
+      realPattern.addColorStopRGBA(1, startColor.red / 255, startColor.green / 255, startColor.blue / 255, 0);
+      cr.setSource(realPattern);
+
+      cr.showText(resultText);
+      cr.fill();
+      } catch(e) {Main.notify("err"+ e.message)}
+   }
+};
+
 function MyApplet(metadata, orientation, panel_height, instance_id) {
     this._init(metadata, orientation, panel_height, instance_id);
 }
@@ -82,9 +173,14 @@ MyApplet.prototype = {
             this._indicator_icons = [];
 
             this.actorIcon = new St.Bin();
+            this.actorIcon.add_effect_with_name("desaturate", new Clutter.DesaturateEffect());
+            this.actorIcon.remove_effect_by_name("desaturate");
+
             this.actorLabel = new St.Label({ style_class: 'applet-label' });
+            this.gradient = new GradientLabel("", 10);
             this.actor.add(this.actorIcon, { y_align: St.Align.MIDDLE, y_fill: false });
             this.actor.add(this.actorLabel, { y_align: St.Align.MIDDLE, y_fill: false });
+            this.actor.add(this.gradient.actor, { y_align: St.Align.MIDDLE, y_fill: false });
 
             this.settings = new Settings.AppletSettings(this, this.uuid, instance_id);
 
@@ -146,8 +242,10 @@ MyApplet.prototype = {
             if((this.menu)&&(this.menu.default_displayed))
                 this.menu.open();
         }
+        //newLabel = this._normalized_text(newLabel, 10);
         if(this._is_new_app(newLabel, newIcon)) {
-            this.actorLabel.set_text(newLabel);
+            //this.actorLabel.set_text(newLabel);
+            this.gradient.set_text(newLabel);
             this.actorIcon.set_child(newIcon);
         }
     },
@@ -161,16 +259,22 @@ MyApplet.prototype = {
         this._close_menu();
         this.menu = null;
         this.actorIcon.set_child(null);
-        this.actorLabel.set_text("");
+        //this.actorLabel.set_text("");
+        this.gradient.set_text("");
     },
 
     _is_new_app: function(newLabel, newIcon) {
         return ((newIcon != this.actorIcon.get_child())||
-                (newLabel != this.actorLabel.get_text()));
+                (newLabel != this.gradient.text));
     },
 
     _is_new_menu: function(newMenu) {
         return (newMenu != this.menu);
+    },
+
+    _normalized_text: function(text, size) {
+       let result = text.substring(0, Math.min(size, text.length));
+       return result;
     },
 
     _get_icon_size: function() {

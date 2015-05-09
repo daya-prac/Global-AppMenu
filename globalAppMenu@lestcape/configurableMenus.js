@@ -733,7 +733,7 @@ ConfigurableMenuManager.prototype = {
     },
 
     _shouldMadeSourceAction: function(menu) {
-        if (!this.grabbed || menu == this._activeMenu)
+        if (!this.grabbed)
             return false;
         if (this._activeMenu && this._activeMenu.isChildMenu(menu))
             return false;
@@ -757,7 +757,7 @@ ConfigurableMenuManager.prototype = {
     },
 
     _onMenuSourceEnter: function(menu) {
-        if(!this._shouldMadeSourceAction(menu))
+        if(!this._shouldMadeSourceAction(menu) || menu == this._activeMenu)
            return false;
 
         this._changeMenu(menu);
@@ -769,11 +769,11 @@ ConfigurableMenuManager.prototype = {
        if ((this.grabbed) && (topMenu) && (topMenu.actor.get_parent() == Main.uiGroup)) {
            this._disconnectTimeOut();
            this._lastMenuTimeOut = Mainloop.idle_add(Lang.bind(this, function() {
-           //this._lastMenuTimeOut = Mainloop.timeout_add(500, Lang.bind(this, function() {
-           this._disconnectTimeOut();
-           let focus = global.stage.key_focus;
-           if ((menu == this._activeMenu) && (focus) && (topMenu.actor.contains(focus)))
-               this._onMenuSourceCompleteLeave(menu);
+              //this._lastMenuTimeOut = Mainloop.timeout_add(500, Lang.bind(this, function() {
+              this._disconnectTimeOut();
+              let focus = global.stage.key_focus;
+              if ((focus) && (topMenu.actor.contains(focus)))
+                 this._onMenuSourceCompleteLeave(menu);
            }));
        }
     },
@@ -786,17 +786,8 @@ ConfigurableMenuManager.prototype = {
     },
 
     _onMenuSourceCompleteLeave: function(menu) {
-        this._disconnectTimeOut();
-        let focus = global.stage.key_focus;
-
-        if (!this.grabbed)
-            return false;
-
-        if (this._activeMenu && this._activeMenu.isChildMenu(menu))
-            return false;
-
-        if (this._menuStack.indexOf(menu) != -1)
-            return false;
+        if(!this._shouldMadeSourceAction(menu) || menu != this._activeMenu)
+           return false;
 
         if (this._activeMenu) {
             let oldMenu = this._activeMenu;
@@ -1844,52 +1835,52 @@ function ConfigurablePopupSwitchMenuItem() {
 }
 
 ConfigurablePopupSwitchMenuItem.prototype = {
-    __proto__: PopupMenu.PopupBaseMenuItem.prototype,
+   __proto__: PopupMenu.PopupBaseMenuItem.prototype,
 
-    _init: function(text, imageOn, imageOff, active, params) {
-        PopupMenu.PopupBaseMenuItem.prototype._init.call(this, params);
-        this.actor._delegate = this;
+   _init: function(text, imageOn, imageOff, active, params) {
+      PopupMenu.PopupBaseMenuItem.prototype._init.call(this, params);
+      this.actor._delegate = this;
 
-        this._imageOn = imageOn;
-        this._imageOff = imageOff;
+      this._imageOn = imageOn;
+      this._imageOff = imageOff;
 
-        let table = new St.Table({ homogeneous: false, reactive: true });
+      let table = new St.Table({ homogeneous: false, reactive: true });
 
-        this.label = new St.Label({ text: text });
-        this.label.set_margin_left(6.0);
+      this.label = new St.Label({ text: text });
+      this.label.set_margin_left(6.0);
 
-        this._switch = new PopupMenu.Switch(active);
-        this._switch.actor.set_style_class_name("toggle-switch");
-        this._switch.actor.add_style_class_name("toggle-switch-intl");
+      this._switch = new PopupMenu.Switch(active);
+      this._switch.actor.set_style_class_name("toggle-switch");
+      this._switch.actor.add_style_class_name("toggle-switch-intl");
 
-        if(active)
-           this.icon = new St.Icon({ icon_name: this._imageOn, icon_type: St.IconType.FULLCOLOR, style_class: 'popup-menu-icon' });
-        else
-           this.icon = new St.Icon({ icon_name: this._imageOff, icon_type: St.IconType.FULLCOLOR, style_class: 'popup-menu-icon' });
+      if(active)
+         this.icon = new St.Icon({ icon_name: this._imageOn, icon_type: St.IconType.FULLCOLOR, style_class: 'popup-menu-icon' });
+      else
+         this.icon = new St.Icon({ icon_name: this._imageOff, icon_type: St.IconType.FULLCOLOR, style_class: 'popup-menu-icon' });
 
-        this._statusBin = new St.Bin({ x_align: St.Align.END });
-        this._statusBin.set_margin_left(6.0);
-        this._statusLabel = new St.Label({ text: '', style_class: 'popup-inactive-menu-item' });
-        this._statusBin.child = this._switch.actor;
+      this._statusBin = new St.Bin({ x_align: St.Align.END });
+      this._statusBin.set_margin_left(6.0);
+      this._statusLabel = new St.Label({ text: '', style_class: 'popup-inactive-menu-item' });
+      this._statusBin.child = this._switch.actor;
 
-        table.add(this.icon, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
-        table.add(this.label, {row: 0, col: 1, col_span: 1, y_fill: false, y_expand: true, x_align: St.Align.MIDDLE, y_align: St.Align.MIDDLE});
-        table.add(this._statusBin, {row: 0, col: 2, col_span: 1, x_expand: true, x_align: St.Align.END});
+      table.add(this.icon, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
+      table.add(this.label, {row: 0, col: 1, col_span: 1, y_fill: false, y_expand: true, x_align: St.Align.MIDDLE, y_align: St.Align.MIDDLE});
+      table.add(this._statusBin, {row: 0, col: 2, col_span: 1, x_expand: true, x_align: St.Align.END});
 
-        this.addActor(table, { expand: true, span: 1, align: St.Align.START});
-    },
+      this.addActor(table, { expand: true, span: 1, align: St.Align.START});
+   },
 
-    setToggleState: function(state) {
-        if(state)
-           this.icon.set_icon_name(this._imageOn);
-        else
-           this.icon.set_icon_name(this._imageOff);
-        this._switch.setToggleState(state);
-    },
+   setToggleState: function(state) {
+      if(state)
+         this.icon.set_icon_name(this._imageOn);
+      else
+         this.icon.set_icon_name(this._imageOff);
+      this._switch.setToggleState(state);
+   },
 
-    get_state: function() {
-        return this._switch.state;
-    },
+   get_state: function() {
+      return this._switch.state;
+   },
 
    destroy: function() {
       if(this.actor) {
@@ -1905,26 +1896,26 @@ ConfigurablePopupSwitchMenuItem.prototype = {
  * Just a class to show a radio button.
  */
 function RadioButton() {
-    this._init.apply(this, arguments);
+   this._init.apply(this, arguments);
 }
 
 RadioButton.prototype = {
-    _init: function(state) {
-        this.actor = new St.Bin({ style_class: 'radiobutton' });
-        //this.actor.set_style_class_name("check-box");
-        this.setToggleState(state);
-        this.actor.style = "background-image: url('radiobutton-off.svg');";
-    },
+   _init: function(state) {
+      this.actor = new St.Bin({ style_class: 'radiobutton' });
+      //this.actor.set_style_class_name("check-box");
+      this.setToggleState(state);
+      this.actor.style = "background-image: url('radiobutton-off.svg');";
+   },
 
-    setToggleState: function(state) {
-        if(state) this.actor.add_style_pseudo_class('checked');
-        else this.actor.remove_style_pseudo_class('checked');
-        this.state = state;
-    },
+   setToggleState: function(state) {
+      if(state) this.actor.add_style_pseudo_class('checked');
+      else this.actor.remove_style_pseudo_class('checked');
+      this.state = state;
+   },
 
-    toggle: function() {
-        this.setToggleState(!this.state);
-    }
+   toggle: function() {
+      this.setToggleState(!this.state);
+   }
 };
 
 /**
@@ -1933,32 +1924,32 @@ RadioButton.prototype = {
  * Just a class to show a switch.
  */
 function Switch() {
-    this._init.apply(this, arguments);
+   this._init.apply(this, arguments);
 }
 
 Switch.prototype = {
-    _init: function(state) {
-        this.actor = new St.Bin({ style_class: 'toggle-switch'});
-        if(this.actor.set_accessible_role)
-            this.actor.set_accessible_role(Atk.Role.CHECK_BOX);
-        // Translators: this MUST be either "toggle-switch-us"
-        // (for toggle switches containing the English words
-        // "ON" and "OFF") or "toggle-switch-intl" (for toggle
-        // switches containing "O" and "|"). Other values will
-        // simply result in invisible toggle switches.
-        this.actor.add_style_class_name("toggle-switch-intl");
-        this.setToggleState(state);
-    },
+   _init: function(state) {
+      this.actor = new St.Bin({ style_class: 'toggle-switch'});
+      if(this.actor.set_accessible_role)
+         this.actor.set_accessible_role(Atk.Role.CHECK_BOX);
+      // Translators: this MUST be either "toggle-switch-us"
+      // (for toggle switches containing the English words
+      // "ON" and "OFF") or "toggle-switch-intl" (for toggle
+      // switches containing "O" and "|"). Other values will
+      // simply result in invisible toggle switches.
+      this.actor.add_style_class_name("toggle-switch-intl");
+      this.setToggleState(state);
+   },
 
-    setToggleState: function(state) {
-        if(state) this.actor.add_style_pseudo_class('checked');
-        else this.actor.remove_style_pseudo_class('checked');
-        this.state = state;
-    },
+   setToggleState: function(state) {
+      if(state) this.actor.add_style_pseudo_class('checked');
+      else this.actor.remove_style_pseudo_class('checked');
+      this.state = state;
+   },
 
-    toggle: function() {
-        this.setToggleState(!this.state);
-    }
+   toggle: function() {
+      this.setToggleState(!this.state);
+   }
 };
 
 /**
@@ -2298,20 +2289,11 @@ ConfigurableMenuApplet.prototype = {
          menuItem.menu.setArrowSide(this._orientation);
          menuItem._triangle.hide();
          menuItem._icon.hide();
-         let currentWidth = menuItem.label.width - menuItem.label.get_margin_left() - menuItem.label.get_margin_right();
-         let minWidth = (this.minItemWidth / this.scale);
-         if(currentWidth < minWidth) {
-            let margin = (minWidth - currentWidth)/2;
-            menuItem.label.set_margin_left(margin);
-            menuItem.label.set_margin_right(margin);
-         } else {
-            menuItem.label.set_margin_left(2.0);
-            menuItem.label.set_margin_right(2.0);
-         }
+         //menuItem._icon.set_margin_right(6.0);
          menuItem.label.set_style_class_name('applet-label');
          //menuItem.actor.set_style_class_name('popup-submenu-menu-item');
+         //menuItem.actor.add_style_class_name('popup-menu-item');
          menuItem.actor.add_style_class_name('applet-box');
-         menuItem.actor.add_style_class_name('apopup-menu-item');
          menuItem.actor.connect('button-press-event', Lang.bind(this, this._onButtonPressEvent));
       } else {
          /*if(!this.menu)

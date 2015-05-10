@@ -1,40 +1,112 @@
 {
-    "head" : {
+    "separator-application-top": {
+        "type": "separator"
+    },
+    "head-application" : {
         "type" : "header",
-        "description" : "Cinnamon-Appmenu Settings"
+        "description" : "Applications"
     },
-    "indicator-locator": {
-        "type": "combobox",
-        "description": "Where to put indicator icons per default:",
-        "default": "classic",
-        "tooltip": "Control where the extension will display indicator icons.",
-        "options": {
-            "Panel": "panel",
-            "Message Tray": "message-tray"
-        }
+    "separator-application-bottom": {
+        "type": "separator"
     },
-    "head" : {
+    "show-app-icon" : {
+        "type" : "checkbox",
+        "default" : true,
+        "description": "Show the application icon in the panel",
+        "tooltip": "Select if you want to show the application icon in the panel."
+    },
+    "desaturate-app-icon" : {
+        "type" : "checkbox",
+        "default" : false,
+        "description": "Desaturate the application icon",
+        "tooltip": "Select if you want to desaturate the application icon",
+        "indent": true,
+        "dependency": "show-app-icon"
+    },
+    "show-app-name" : {
+        "type" : "checkbox",
+        "default" : true,
+        "description": "Show the application name in the panel",
+        "tooltip": "Select if you want to show the application name in the panel."
+    },
+    "max-app-name-size" : {
+        "type": "spinbutton",
+        "default": 10,
+        "min": 1,
+        "max": 30,
+        "step": 1,
+        "units": "characters",
+        "description": "Maximum size of the application name:",
+        "tooltip": "Set the maximum size of the application name.",
+        "indent": true,
+        "dependency": "show-app-name"
+    },
+    "separator-mainmenu-top": {
+        "type": "separator"
+    },
+    "head-mainmenu" : {
         "type" : "header",
-        "description" : "Cinnamon-Maximus Settings"
+        "description" : "Main menu"
     },
-    "undecorateTile" : {
+    "separator-mainmenu-bottom": {
+        "type": "separator"
+    },
+    "display-in-panel" : {
+        "type" : "checkbox",
+        "default" : true,
+        "description": "Display the main menu in the panel",
+        "tooltip": "Select if you want to display the main menu in the panel."
+    },
+    "automatic-active-mainmenu" : {
+        "type" : "checkbox",
+        "default" : true,
+        "description": "Automatically active the main menu",
+        "tooltip": "Select if you want to automatically active the main menu.",
+        "indent": true,
+        "dependency": "display-in-panel"
+    },
+    "separator-submenu-top": {
+        "type": "separator"
+    },
+    "head-submenu" : {
+        "type" : "header",
+        "description" : "Submenu"
+    },
+    "separator-submenu-bottom": {
+        "type": "separator"
+    },
+    "close-active-submenu" : {
         "type" : "checkbox",
         "default" : false,
-        "description": "Undecorate when tile"
+        "description": "Automatically close the submenu",
+        "tooltip": "Select if you want to automatically close the submenu when the mouse is out of the launcher."
     },
-    "undecorateAll" : {
+    "show-boxpointer" : {
+        "type" : "checkbox",
+        "default" : true,
+        "description": "Show the boxpointers",
+        "tooltip": "Select if you want to show the boxpointer of all floating menus."
+    },
+    "align-menu-launcher" : {
         "type" : "checkbox",
         "default" : false,
-        "description": "Undecorate All Windows (Experimental, please close and re-open all windows)"
+        "description": "Align all menus with his launcher",
+        "tooltip": "Select if you want to align all menus with his launcher."
     },
-    "blacklist" : {
+    "separator-menuitem-top": {
+        "type": "separator"
+    },
+    "head-menuitem" : {
+        "type" : "header",
+        "description" : "Menu items"
+    },
+    "separator-menuitem-bottom": {
+        "type": "separator"
+    },
+    "show-item-icon" : {
         "type" : "checkbox",
-        "default" : false,
-        "description": "Use Blacklist"
-    },
-    "blacklist_apps": {
-        "type": "entry", 
-        "description": "Blacklist Apps (\"Recheck Blacklist Active\", please use \",\" for seperate apps)", 
-        "default": "chromium"
+        "default" : true,
+        "description": "Show icons in the menu items",
+        "tooltip": "Select if you want to show icons in the menu items."
     }
 }

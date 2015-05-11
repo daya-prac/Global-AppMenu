@@ -46,6 +46,18 @@ MyMenuFactory.prototype = {
       this._floatingSubMenu = true;
       this._alignSubMenu = false;
       this._showItemIcon = true;
+      this._arrowSide = St.Side.BOTTOM;
+   },
+
+   setMainMenuArrowSide: function(arrowSide) {
+      if(this._arrowSide != arrowSide) {
+          this._arrowSide = arrowSide;
+          for (let pos in this._menuLikend) {
+              let shellMenu = this._menuLikend[pos].getShellItem();
+              if(shellMenu)
+                 shellMenu.setArrowSide(this._arrowSide);
+          }
+      }
    },
 
    setFloatingState: function(floating) {
@@ -113,6 +125,7 @@ MyMenuFactory.prototype = {
    // SeparatorMenuItemClass: PopupMenu.PopupSeparatorMenuItem
    _createShellItem: function(factoryItem, launcher, orientation, menuManager) {
       // Decide whether it's a submenu or not
+      this._arrowSide = orientation;
       if(menuManager) {
           menuManager.showBoxPointer(this._showBoxPointer);
           menuManager.setCloseSubMenu(this._closeSubMenu);
@@ -423,6 +436,11 @@ MyApplet.prototype = {
       else
          icon_size = Applet.FALLBACK_ICON_HEIGHT;
       return icon_size;
+   },
+
+   on_orientation_changed: function(orientation) {
+      this.orientation = orientation;
+      this.menuFactory.setMainMenuArrowSide(orientation);
    },
 
    on_panel_height_changed: function() {

@@ -403,7 +403,7 @@ try {
       let cr = area.get_context();
       Clutter.cairo_set_source_color(cr, borderColor);
 
-      // Translate so that box goes from 0,0 to boxWidth,boxHeight,
+      // Translate so that box goes from 0,0 to boxWidth, boxHeight,
       // with the arrow poking out of that
       if(this._arrowSide == St.Side.TOP) {
          cr.translate(0, rise);
@@ -953,7 +953,6 @@ ConfigurableMenu.prototype = {
          this._showItemIcon = true;
 
          this.launcher = null;
-         this.orientation_id = 0;
          this._openedSubMenu = null;
 
          // Since a function of a submenu might be to provide a "More.." expander
@@ -1026,12 +1025,7 @@ ConfigurableMenu.prototype = {
    },
 
    addMenuItem: function(menuItem, position) {
-      if((menuItem instanceof PopupMenu.PopupMenuItem) && (menuItem.showIcon)) {
-         menuItem.showIcon(this._showItemIcon);
-      }  else if ((menuItem instanceof PopupMenu.PopupBaseMenuItem ||
-                   menuItem instanceof PopupMenu.PopupMenuSection) && (menuItem.setShowItemIcon) ) {
-         menuItem.setShowItemIcon(this._showItemIcon);
-      }
+      this._setShowItemIcon(menuItem);
       PopupMenu.PopupMenu.prototype.addMenuItem.call(this, menuItem, position);
    },
 
@@ -1041,13 +1035,20 @@ ConfigurableMenu.prototype = {
          let items = this._getMenuItems();
          for(let pos in items) {
             let menuItem = items[pos];
-            if((menuItem instanceof PopupMenu.PopupMenuItem) && (menuItem.showIcon)) {
-               menuItem.showIcon(this._showItemIcon);
-            } else if ((menuItem instanceof PopupMenu.PopupBaseMenuItem ||
-                        menuItem instanceof PopupMenu.PopupMenuSection) && (menuItem.setShowItemIcon) ) {
-               menuItem.setShowItemIcon(this._showItemIcon);
-            }
+            this._setShowItemIcon(menuItem);
          }
+      }
+   },
+
+   _setShowItemIcon: function(menuItem) {
+      if(menuItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+         if(menuItem.setShowItemIcon)
+            menuItem.setShowItemIcon(this._showItemIcon);
+         if(menuItem.menu.setShowItemIcon)
+            menuItem.menu.setShowItemIcon(this._showItemIcon);
+      } else {
+         if(menuItem.setShowItemIcon)
+            menuItem.setShowItemIcon(this._showItemIcon);
       }
    },
 
@@ -1077,36 +1078,13 @@ ConfigurableMenu.prototype = {
    },
 
    setLauncher: function(launcher) {
-      this.closeClean();
-      if(this.launcher != launcher) {
-         if(this.launcher) {
-            if(this.orientation_id > 0) {
-               if (this.launcher.actor instanceof Applet.Applet)
-                  this.launcher.disconnect(this.orientation_id);
-               else if (this.launcher._applet)
-                  this.launcher._applet.disconnect(this.orientation_id);
-               this.orientation_id = 0;
-            }
-            if(!this._floating)
-               this._releaseActorState();
-         }
-         
-         this.launcher = launcher;
-         if(this.launcher) {
-            //this.sourceActor = this.launcher.actor;
-            if(this._floating) {
-               if(this.launcher.actor)
-                  this._boxPointer.trySetPosition(this.launcher.actor, this._arrowAlignment);
-               if (this.launcher.actor instanceof Applet.Applet)
-                  this.orientation_id = this.launcher.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
-               else if (this.launcher._applet)
-                  this.orientation_id = this.launcher._applet.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
-            } else {
-              // this._insertMenuOnLauncher();
-            }
-         }
+      this.closeClean();      
+      this.launcher = launcher;
+      if(this.launcher) {
+         //this.sourceActor = this.launcher.actor;
+         this._boxPointer.trySetPosition(this.launcher.actor, this._arrowAlignment);
+         this._updateTopMenu();
       }
-      this._updateTopMenu();
    },
 
    _insertMenuOnLauncher: function() {
@@ -1157,10 +1135,6 @@ ConfigurableMenu.prototype = {
    isInPosition: function(actor) {
       return actor == this._boxPointer._sourceActor;
    },
-   
-   _onOrientationChanged: function(a, orientation) {
-       this.setArrowSide(orientation);
-   },
 
    _on_paint: function(actor) {
       if (this._paint_count < 2 || this.animating) {
@@ -1186,8 +1160,42 @@ ConfigurableMenu.prototype = {
    },
 
    setArrowSide: function(side) {
-      this._arrowSide = side;
-      this._boxPointer.setArrowSide(side);
+      if(this._arrowSide != side) {
+         this._arrowSide = side;
+         this._boxPointer.setArrowSide(this._arrowSide);
+         if((this.launcher instanceof PopupMenu.PopupSubMenuMenuItem)&&(this.launcher.setArrowSide)) {
+            this.launcher.setArrowSide(this._arrowSide);
+         }
+      }
+   },
+
+   _setChildsArrowSide: function() {
+      let monitor = Main.layoutManager.findMonitorForActor(this.actor);
+      if(monitor) {
+         let leftEdge = monitor.x;
+         let rightEdge = leftEdge + monitor.width;
+         let [leftMenu, ay] = this.actor.get_transformed_position();
+         leftMenu = leftMenu - 20;
+         let rightMenu = leftMenu + this.actor.width + 20;
+         let childArrowSide = St.Side.LEFT;
+         if(this._arrowSide == St.Side.RIGHT)
+            childArrowSide = this._arrowSide;
+         else if((this._arrowSide == St.Side.TOP) || (this._arrowSide == St.Side.BOTTOM)) {
+            if(leftMenu + this.actor.width/2 > leftEdge + rightEdge/2)
+               childArrowSide = St.Side.RIGHT;
+         }
+         for(let pos in this._childMenus) {
+            let menu = this._childMenus[pos];
+            if ((childArrowSide == St.Side.LEFT) && (rightMenu + menu.actor.width  > rightEdge)) {
+               childArrowSide = St.Side.RIGHT;
+            } else if((childArrowSide == St.Side.RIGHT) && (leftMenu - menu.actor.width < leftEdge)) {
+               childArrowSide = St.Side.LEFT;
+            }
+            menu.setArrowSide(childArrowSide);
+         }
+      } else {
+         global.logError("Fail to get the monitor for oriented the arrow child side.");
+      }
    },
 
    _boxGetPreferredWidth: function (actor, forHeight, alloc) {
@@ -1337,6 +1345,9 @@ ConfigurableMenu.prototype = {
       this._scroll.vscrollbar_policy =
             needsScrollbar ? Gtk.PolicyType.AUTOMATIC : Gtk.PolicyType.NEVER;
 
+      // We don't need this right now and also we need to find
+      // the monitor on Crome, so, request on idle.
+      Mainloop.idle_add(Lang.bind(this, this._setChildsArrowSide));
       this.emit('open-state-changed', true);
      } catch(e) {Main.notify("err2" , e.message)}
    },
@@ -1740,18 +1751,18 @@ ConfigurableMenu.prototype = {
    _releaseActorState: function() {
       let parent = this._scroll.get_parent();
       if(parent != null)
-          parent.remove_actor(this._scroll);
-    },
+         parent.remove_actor(this._scroll);
+   },
 
-    _needsScrollbar: function() {
-       let topMenu = this.getTopMenu();
-       if(!topMenu)
-          return false;
-       let [topMinHeight, topNaturalHeight] = topMenu.actor.get_preferred_height(-1);
-       let topThemeNode = topMenu.actor.get_theme_node();
+   _needsScrollbar: function() {
+      let topMenu = this.getTopMenu();
+      if(!topMenu)
+         return false;
+      let [topMinHeight, topNaturalHeight] = topMenu.actor.get_preferred_height(-1);
+      let topThemeNode = topMenu.actor.get_theme_node();
 
-       let topMaxHeight = topThemeNode.get_max_height();
-       return topMaxHeight >= 0 && topNaturalHeight >= topMaxHeight;
+      let topMaxHeight = topThemeNode.get_max_height();
+      return topMaxHeight >= 0 && topNaturalHeight >= topMaxHeight;
    },
 
    getTopMenu: function() {
@@ -1804,7 +1815,7 @@ ConfigurableMenu.prototype = {
  * Just a class to controlled a switch.
  */
 function ConfigurablePopupSwitchMenuItem() {
-    this._init.apply(this, arguments);
+   this._init.apply(this, arguments);
 }
 
 ConfigurablePopupSwitchMenuItem.prototype = {
@@ -1943,9 +1954,8 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
    _init: function(text, hide_expander) {
       ConfigurablePopupMenuItem.prototype._init.call(this, text);
       this.actor._delegate = this;
-      //this.sourceActor = this.actor;
       this.actor.add_style_class_name('popup-submenu-menu-item');
-      this._arrowSide = St.Side.RIGHT;
+      this._arrowSide = St.Side.LEFT;
       this._hide_expander = hide_expander;
 
       this._icon = new St.Icon({ style_class: 'popup-menu-icon' });
@@ -1958,21 +1968,40 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
       this._triangle.rotation_center_z_gravity = Clutter.Gravity.CENTER;
       if(this._hide_expander)
          this._triangle.hide();
-/*
-      this.actor.remove_actor(this.label);
-      this.table = new St.Table({ homogeneous: false, reactive: true });
-      this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
-      this.label.set_margin_left(6.0);
-      this.table.add(this.label, {row: 0, col: 1, col_span: 1, x_align: St.Align.START});
 
-      this.actor.add(this.table, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
-*/
       this.actor.add(this._triangle, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
 
       this.menu = new ConfigurableMenu(this, 0.0, St.Side.LEFT, false);
       this.menu.connect('open-state-changed', Lang.bind(this, this._subMenuOpenStateChanged));
       this.actor.connect('notify::mapped', Lang.bind(this, this._onMapped));
-      //this.actor.connect('key-press-event', Lang.bind(this, this._onKeyPressEvent));*/
+   },
+
+   setArrowSide: function(side) {
+      if(this._arrowSide != side) {
+         if(this.menu._floating) {
+            switch (side) {
+               case St.Side.TOP:
+               case St.Side.BOTTOM:
+               case St.Side.LEFT:
+                  if(this._triangle.rotation_angle_z != 0)
+                     this._triangle.rotation_angle_z = 0;
+                  if(this._arrowSide == St.Side.RIGHT) {
+                     this.actor.remove_actor(this._triangle);
+                     this.actor.add(this._triangle, { x_align: St.Align.END, y_align: St.Align.MIDDLE, x_fill:false });
+                  }
+                  break;
+               case St.Side.RIGHT:
+                  if(this._triangle.rotation_angle_z != 180)
+                     this._triangle.rotation_angle_z = 180;
+                  if(this._arrowSide != St.Side.RIGHT) {
+                     this.actor.remove_actor(this._triangle);
+                     this.actor.insert_before(this._triangle, this.label);
+                  }
+                  break;
+            }
+            this._arrowSide = side;
+         }
+      }
    },
 
    _subMenuOpenStateChanged: function(menu, open) {
@@ -1986,46 +2015,13 @@ ConfigurablePopupSubMenuMenuItem.prototype = {
          }
       } else {
          this.actor.remove_style_pseudo_class('open');
-         this._triangle.rotation_angle_z = 0;
+         if(!this.menu._floating)
+            this._triangle.rotation_angle_z = 0;
       }
    },
 
    _onMapped: function() {
       this.menu._updateTopMenu();
-     /* if((!this._hide_expander)&&(this.menu._floating)) {
-         let arrowSide = null;
-         if(!this.topMenu)
-            this.topMenu = this.menu.getTopMenu();
-         if(this.topMenu)
-            arrowSide = St.Side.LEFT;//this.topMenu._arrowSide;
-         if((arrowSide)&&(this._arrowSide != arrowSide)) {
-            this._arrowSide = arrowSide;
-            this.table.remove_actor(this._triangle);
-            this.table.remove_actor(this.label);
-            this.label.set_margin_left(0.0);
-            this._triangle.set_margin_left(0.0);
-            this._triangle.rotation_angle_z = 0;
-            switch (this._arrowSide) {
-               case St.Side.TOP:
-               case St.Side.BOTTOM:
-                  this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
-                  this.table.add(this.label,     {row: 0, col: 1, col_span: 1,                  x_align: St.Align.START});
-                  this.label.set_margin_left(6.0);
-                  break;
-               case St.Side.LEFT:
-                  this.table.add(this.label,     {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.START});
-                  this.table.add(this._triangle, {row: 0, col: 1, col_span: 1, x_expand: true,  x_align: St.Align.END});
-                  this._triangle.set_margin_left(6.0);
-                  break;
-               case St.Side.RIGHT:
-                  this.table.add(this._triangle, {row: 0, col: 0, col_span: 1, x_expand: false, x_align: St.Align.END});
-                  this.table.add(this.label,     {row: 0, col: 1, col_span: 1,                  x_align: St.Align.START});
-                  this.label.set_margin_left(6.0);
-                  this._triangle.rotation_angle_z = 180;
-                  break;
-            }
-         }
-      }*/
    },
 
    _onButtonReleaseEvent: function (actor, event) {
@@ -2065,12 +2061,7 @@ ConfigurablePopupMenuSection.prototype = {
    },
 
    addMenuItem: function(menuItem, position) {
-      if((menuItem instanceof PopupMenu.PopupMenuItem) && (menuItem.showIcon)) {
-         menuItem.showIcon(this._showItemIcon);
-      }  else if ((menuItem instanceof PopupMenu.PopupBaseMenuItem ||
-                   menuItem instanceof PopupMenu.PopupMenuSection) && (menuItem.setShowItemIcon) ) {
-         menuItem.setShowItemIcon(this._showItemIcon);
-      }
+      this._setShowItemIcon(menuItem);
       PopupMenu.PopupMenuSection.prototype.addMenuItem.call(this, menuItem, position);
    },
 
@@ -2080,13 +2071,20 @@ ConfigurablePopupMenuSection.prototype = {
          let items = this._getMenuItems();
          for(let pos in items) {
             let menuItem = items[pos];
-            if((menuItem instanceof PopupMenu.PopupMenuItem) && (menuItem.showIcon)) {
-               menuItem.showIcon(this._showItemIcon);
-            } else if ((menuItem instanceof PopupMenu.PopupBaseMenuItem ||
-                        menuItem instanceof PopupMenu.PopupMenuSection) && (menuItem.setShowItemIcon) ) {
-               menuItem.setShowItemIcon(this._showItemIcon);
-            }
+            this._setShowItemIcon(menuItem);
          }
+      }
+   },
+
+   _setShowItemIcon: function(menuItem) {
+      if(menuItem instanceof PopupMenu.PopupSubMenuMenuItem) {
+         if(menuItem.setShowItemIcon)
+            menuItem.setShowItemIcon(this._showItemIcon);
+         if(menuItem.menu.setShowItemIcon)
+            menuItem.menu.setShowItemIcon(this._showItemIcon);
+      } else {
+         if(menuItem.setShowItemIcon)
+            menuItem.setShowItemIcon(this._showItemIcon);
       }
    },
 
@@ -2195,7 +2193,7 @@ ConfigurableApplicationMenuItem.prototype = {
       this._icon.hide();
    },
 
-   showIcon: function(show) {
+   setShowItemIcon: function(show) {
       this.displayIcon = show;
       if(this.displayIcon) {
          if ((this._icon.icon_name && this._icon.icon_name != "") ||
@@ -2205,7 +2203,7 @@ ConfigurableApplicationMenuItem.prototype = {
          this._icon.visible = false;
    },
 
- setIconName: function(name) {
+   setIconName: function(name) {
       this._icon.visible = ((this.displayIcon) && (name && name != ""));
       this._icon.icon_name = iconName;
    },
@@ -2300,6 +2298,28 @@ ConfigurableMenuApplet.prototype = {
       } else {
          this.isOpen = true;
          this.actor.show();
+         this._setChildsArrowSide();
+      }
+   },
+
+   setArrowSide: function(side) {
+      ConfigurableMenu.prototype.setArrowSide.call(this, side);
+      if(!this._floating) {
+         for(let pos in this._childMenus) {
+            let menu = this._childMenus[pos];
+            menu.setArrowSide(side);
+         }
+      }
+   },
+
+   _setChildsArrowSide: function() {
+      if(this._floating) {
+         ConfigurableMenu.prototype._setChildsArrowSide.call(this);
+      } else {
+         for(let pos in this._childMenus) {
+            let menu = this._childMenus[pos];
+            menu.setArrowSide(this._arrowSide);
+         }
       }
    },
 
@@ -3147,7 +3167,7 @@ MenuFactory.prototype = {
     },
 
     // If this function is apply, this mean that our old shellItem
-    // is not valid rigth now, so we can destroy it with all the deprecate
+    // is not valid right now, so we can destroy it with all the deprecate
     // submenu structure and then create again for the new factoryItem source.
     _onTypeChanged: function(factoryItem) {
         let shellItem = factoryItem.getShellItem();

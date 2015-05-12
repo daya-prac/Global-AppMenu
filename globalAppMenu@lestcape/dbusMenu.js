@@ -68,8 +68,8 @@ const IconTheme = Gtk.IconTheme.get_default();
 /**
  * Saves menu property values and handles type checking and defaults
  */
-function PropertyStore(initial_properties) {
-    this._init(initial_properties);
+function PropertyStore() {
+    this._init.apply(this, arguments);
 }
 
 PropertyStore.prototype = {
@@ -165,8 +165,8 @@ PropertyStore.prototype = {
 /**
  * Represents a single menu item
  */
-function DbusMenuItem(id, children_ids, properties, client) {
-    this._init(id, children_ids, properties, client);
+function DbusMenuItem() {
+    this._init.apply(this, arguments);
 }
 
 DbusMenuItem.prototype = {
@@ -202,7 +202,7 @@ DbusMenuItem.prototype = {
         if(("children-display" in properties)||("type" in properties))
             params.type = this._getFactoryType(propStore.get_string('children-display'), propStore.get_string('type'))
         if("action" in properties)
-            params.action = propStore.get_string("action").replace("unity.", "");
+            params.action = propStore.get_string("action");
         if("param-type" in properties)
             params.paramType = propStore.get_variant("param-type");
         return params;
@@ -229,7 +229,7 @@ DbusMenuItem.prototype = {
         if(("children-display" in properties)||("type" in properties))
             this.setFactoryType(this._getFactoryType(propStore.get_string('children-display'), propStore.get_string('type')));
         if("action" in properties)
-            this.setAction(propStore.get_string("action").replace("unity.", ""));
+            this.setAction(propStore.get_string("action"));
         if("param-type" in properties)
             this.setParamType(propStore.get_variant("param-type"));
     },
@@ -295,8 +295,8 @@ DbusMenuItem.prototype = {
 /**
  * The client does the heavy lifting of actually reading layouts and distributing events
  */
-function DBusClient(busName, busPath) {
-    this._init(busName, busPath);
+function DBusClient() {
+    this._init.apply(this, arguments);
 }
 
 DBusClient.prototype = {
@@ -593,22 +593,25 @@ DBusClient.prototype = {
     }
 };
 
-function DBusClientGtk(busName, busPath) {
-    this._init(busName, busPath);
+function DBusClientGtk() {
+    this._init.apply(this, arguments);
 }
 
 DBusClientGtk.prototype = {
     __proto__: DBusClient.prototype,
 
-    _init: function(busName, busPath) {
+    _init: function(busName, busPath, windowPath, appPath) {
         DBusClient.prototype._init.call(this, busName, busPath);
         this.labels_ids = {};
         this._idActionsUpdate = 0;
         this.gtk_menubar_menus = null;
+        this._windowPath = windowPath;
+        this._appPath = appPath;
+        this.actions_ids = {};//FIXME add and remove better?
     },
 
     get_root_id: function() {
-        return "02"; //FIXME will start always on 02?
+        return "00"; //FIXME will start always on 02?
     },
 
     _start_main_proxy: function() {
@@ -617,32 +620,33 @@ DBusClientGtk.prototype = {
         return proxy;
     },
 
-    _requestActionsUpdate: function() {
-        if(this._idActionsUpdate != 0)
-            this._idActionsUpdate = 0;
-        let action_ids = [];
-        if(this._proxy_action)
-            this._proxy_action.DescribeAllRemote(Lang.bind(this, this._endActionsUpdate));
+    _requestActionsUpdate: function(proxy, type) {
+        //if (this._idActionsUpdate != 0)
+        //    this._idActionsUpdate = 0;
+        if (proxy)
+            proxy.DescribeAllRemote(Lang.bind(this, this._endActionsUpdate, type));
     },
 
-    _endActionsUpdate: function(result, error) {//FIXME not all values are updated.
+    _endActionsUpdate: function(result, error, type) {//FIXME not all values are updated.
         if (error) {
-            global.logWarning("While reading menu actions: "+error);
+            global.logWarning("While reading menu actions: " + error);
             return;
         }
         if((result) && (result[0])) {
             let properties_hash = result[0];
             let isNotCreate = false;
-            for(let action_id in properties_hash) {
+
+            for(let action in properties_hash) {
+                let action_id = type + "." + action;
                 if((isNotCreate)&&(!(action_id in this.actions_ids))) {
                     isNotCreate = true;
                     this._create_actions_ids();
                 }
                 let id = this.actions_ids[action_id];
                 if (!(id in this._items))
-                    return;
+                    continue;
 
-                let properties = properties_hash[action_id];
+                let properties = properties_hash[action];
                 this._items[id].setSensitive(properties[0]);
                 if(properties[1])
                     this._items[id].setParamType(GLib.Variant.new("g", properties[1]));
@@ -661,7 +665,6 @@ DBusClientGtk.prototype = {
     },
 
     _create_actions_ids: function() {
-        this.actions_ids = {};//FIXME add and remove better?
         let theme = Gtk.IconTheme.get_default();
         for(let id in this._items) {
             let action_id = this._items[id].getAction();
@@ -724,9 +727,22 @@ DBusClientGtk.prototype = {
             let init_id = this.get_root_id();
             this.gtk_menubar_menus = {};
             this.gtk_menubar_menus[init_id] = [];
-            result[0].forEach(function([menu_pos, section_pos, section_items]) {
-                this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
-            }, this);
+            let menuData = result[0];
+            // We really don't know where is our root items but, we supposed that
+            // the items have an order and our root item need to have at less
+            // a label in the first position, so try to find the first match.
+            let realInit = false;
+            for(let pos in menuData) {
+                let [menu_pos, section_pos, section_items] = menuData[pos];
+                if (!realInit) {
+                    if ((section_items.length > 0)&&("label" in section_items[0])) {
+                        this.gtk_menubar_menus[init_id] = section_items;
+                        realInit = true;
+                    }
+                } else {
+                    this.gtk_menubar_menus["" + menu_pos + section_pos] = section_items;
+                }
+            }
             this._doLayoutUpdate(init_id, { "children-display": GLib.Variant.new_string("rootmenu"), 'visible': GLib.Variant.new_boolean(false) } );
         }
 
@@ -817,15 +833,28 @@ DBusClientGtk.prototype = {
 
     send_event: function(id, event, params, timestamp) {//FIXME no match signal id
         let action_id = this._items[id].getAction();
-        if((action_id)&&(this._proxy_action)) {
+        let proxy = this._findProxyForActionType(action_id);
+        if((action_id)&&(proxy)) {
             let plataform = {};
             if(!params)
                 params = this._items[id].getParamType();
             if(!params) 
                 params = GLib.Variant.new("av", []);
-            this._proxy_action.ActivateRemote(action_id, params, plataform,
+            let action = action_id.replace("unity.", "").replace("win.", "").replace("app.", "");
+            proxy.ActivateRemote(action, params, plataform,
                 function(result, error) {}); // we don't care
         }
+    },
+
+    _findProxyForActionType: function(action_id) {
+        if(action_id.indexOf("unity") == 0) {
+            return this._proxy_unity_action;
+        } else if(action_id.indexOf("win") == 0) {
+            return this._proxy_window_action
+        } else if(action_id.indexOf("app") == 0) {
+            return this._proxy_app_action;
+        }
+        return null;
     },
 
     _onLayoutUpdated: function() {
@@ -835,11 +864,12 @@ DBusClientGtk.prototype = {
         }
     },
 
-    _onActionsUpdated: function() {
-        if(this._idActionsUpdate == 0) {
-            this._idActionsUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE,
-                Lang.bind(this, this._requestActionsUpdate));
-        }
+    _onActionsUpdated: function(proxy, type) {
+        //if(this._idActionsUpdate == 0) {
+            //this._idActionsUpdate =
+            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE,
+                Lang.bind(this, this._requestActionsUpdate, proxy, type));
+        //}
     },
 
     _clientReady: function(result, error) {
@@ -847,25 +877,38 @@ DBusClientGtk.prototype = {
             global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
         }
-        this._proxy_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath,
-            Lang.bind(this, this._clientActionReady));
-    },
-
-    _clientActionReady: function(result, error) {
-        if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
-            //FIXME: show message to the user?
-        }
         this._requestLayoutUpdate();
-        this._requestActionsUpdate();
-
         // listen for updated layouts and actions
         this._idLayoutUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, function() {
             if(this._proxy_menu)
                 this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
-            if(this._proxy_action)
-                this._proxy_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated));
         }));
+        if(this._busPath)
+            this._proxy_unity_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath,
+                Lang.bind(this, this._clientActionReady, "unity"));
+        if(this._windowPath)
+            this._proxy_window_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._windowPath,
+                Lang.bind(this, this._clientActionReady, "win"));
+        if(this._appPath)
+            this._proxy_app_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._appPath,
+                Lang.bind(this, this._clientActionReady, "app"));
+    },
+
+    _clientActionReady: function(result, error, type) {
+        if (error) {
+            global.logWarning("Could not initialize menu proxy: "+error);
+            //FIXME: show message to the user?
+        }
+        if(type == "unity") {
+            this._requestActionsUpdate(this._proxy_unity_action, type);
+            this._proxy_unity_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated, type));
+        } else if(type == "win") {
+            this._requestActionsUpdate(this._proxy_window_action, type);
+            this._proxy_window_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated, type));
+        } else if(type == "app") {
+            this._requestActionsUpdate(this._proxy_app_action, type);
+            this._proxy_app_action.connectSignal("Changed", Lang.bind(this, this._onActionsUpdated, type));
+        }
     },
 
     destroy: function() {
@@ -873,9 +916,17 @@ DBusClientGtk.prototype = {
             DBusClient.prototype.destroy.call(this);
             this._proxy_menu = null;
         }
-        if(this._proxy_action) {
-            Signals._disconnectAll.apply(this._proxy_action);
-            this._proxy_action = null;
+        if(this._proxy_unity_action) {
+            Signals._disconnectAll.apply(this._proxy_unity_action);
+            this._proxy_unity_action = null;
+        }
+        if(this._proxy_window_action) {
+            Signals._disconnectAll.apply(this._proxy_window_action);
+            this._proxy_window_action = null;
+        }
+        if(this._proxy_app_action) {
+            Signals._disconnectAll.apply(this._proxy_app_actionn);
+            this._proxy_app_action = null;
         }
     }
 };

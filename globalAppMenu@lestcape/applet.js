@@ -235,6 +235,7 @@ GradientLabel.prototype = {
 
       cr.showText(resultText);
       cr.fill();
+      cr.stroke();
       } catch(e) {Main.notify("err"+ e.message)}
    }
 };

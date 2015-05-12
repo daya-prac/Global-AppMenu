@@ -274,16 +274,18 @@ IndicatorAppMenuWatcher.prototype = {
     _get_menu_client: function(xid, callback) {
         if(xid in this._registered_windows) {
             var sender = this._registered_windows[xid].sender;
-            var path = this._registered_windows[xid].menubarObjectPath;
+            var menubarPath = this._registered_windows[xid].menubarObjectPath;
+            var windowPath = this._registered_windows[xid].windowObjectPath;
+            var appPath = this._registered_windows[xid].appObjectPath;
             var is_gtk = this._registered_windows[xid].isGtk;
-            if((sender != "")&&(path != "")) {
+            if((sender != "")&&(menubarPath != "")) {
                 if(!is_gtk) {
-                    this._validateMenu(sender, path, Lang.bind(this, function(r, name, path) {
+                    this._validateMenu(sender, menubarPath, Lang.bind(this, function(r, name, menubarPath) {
                         if (r) {
                             if(!this._registered_windows[xid].appMenu) {
                                 //Main.notify("no " + this._registered_windows[xid].window.title)
-                                global.log(logName + "Creating menu on " + [name, path]);
-                                callback(xid, new DBusMenu.DBusClient(name, path));
+                                global.log(logName + "Creating menu on " + [name, menubarPath]);
+                                callback(xid, new DBusMenu.DBusClient(name, menubarPath));
                             } else {
                                 callback(xid, null);
                             }
@@ -293,9 +295,9 @@ IndicatorAppMenuWatcher.prototype = {
                     }));
                 } else {
                     if(!this._registered_windows[xid].appMenu) {
-                        //Main.notify("si " + this._registered_windows[xid].window.title + " " + path + " " + this._registered_windows[xid].appmenuObjectPath)
-                        global.log(logName + "Creating menu on "+[sender, path]);
-                        callback(xid, new DBusMenu.DBusClientGtk(sender, path));
+                        //Main.notify("si " + this._registered_windows[xid].window.title + " " + menubarPath + " " + this._registered_windows[xid].appmenuObjectPath)
+                        global.log(logName + "Creating menu on "+[sender, menubarPath]);
+                        callback(xid, new DBusMenu.DBusClientGtk(sender, menubarPath, windowPath, appPath));
                     } else {
                         callback(xid, null);
                     }
@@ -432,18 +434,26 @@ IndicatorAppMenuWatcher.prototype = {
         let appT = null;
         let is_gtk = false;
         let appmenuPath = "";
+        let windowPath = "";
+        let appPath = "";
         if(wind) {
             appT = this._tracker.get_window_app(wind);
             if((!menubarPath)||(!sender_dbus)) {
                 let menubar_object_path = wind.get_gtk_menubar_object_path();
                 let appmenu_object_path = wind.get_gtk_app_menu_object_path();
-                let unique_bus_name = wind.get_gtk_unique_bus_name();
+                let window_object_path  = wind.get_gtk_window_object_path();
+                let app_object_path     = wind.get_gtk_application_object_path();
+                let unique_bus_name     = wind.get_gtk_unique_bus_name();
                 //Main.notify("" + wind.title + " " + appT.get_name() + " " + menubar_object_path + " " + unique_bus_name)
                 if((unique_bus_name)&&((menubar_object_path)||(appmenu_object_path))) {
                     if(menubar_object_path)
                         menubarPath = menubar_object_path;
                     if(appmenu_object_path)
                         appmenuPath = appmenu_object_path;
+                    if(window_object_path)
+                        windowPath = window_object_path;
+                    if(app_object_path)
+                        appPath = app_object_path;
                     sender_dbus = unique_bus_name;
                     is_gtk = true;
                 }
@@ -472,6 +482,10 @@ IndicatorAppMenuWatcher.prototype = {
             if(appmenuPath != "")
                 this._registered_windows[xid].appmenuObjectPath = appmenuPath;
                 //this._registered_windows[xid].menubarObjectPath = appmenuPath;
+            if(windowPath != "")
+                this._registered_windows[xid].windowObjectPath = windowPath;
+            if(windowPath != "")
+                this._registered_windows[xid].appObjectPath = appPath;
             if(sender_dbus != "")
                 this._registered_windows[xid].sender = sender_dbus;
             if(appT)
@@ -496,6 +510,8 @@ IndicatorAppMenuWatcher.prototype = {
                 menubarObjectPath: menubarPath,
                 //menubarObjectPath: appmenuPath,
                 appmenuObjectPath: appmenuPath,
+                windowObjectPath: windowPath,
+                appObjectPath: appPath,
                 sender: sender_dbus,
                 isGtk: is_gtk,
                 icon: null,

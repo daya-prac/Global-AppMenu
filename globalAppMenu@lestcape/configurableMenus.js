@@ -2302,6 +2302,22 @@ ConfigurableMenuApplet.prototype = {
       }
    },
 
+   close: function(animate, forced) {
+      if(this._floating) {
+         ConfigurableMenu.prototype.close.call(this, animate);
+      } else if(forced) {
+         this.actor.hide();
+         this.isOpen = false;
+      }
+   },
+
+   forcedToggle: function() {
+      if(this.isOpen)
+          this.close(false, true);
+      else
+          this.open();
+   },
+
    setArrowSide: function(side) {
       ConfigurableMenu.prototype.setArrowSide.call(this, side);
       if(!this._floating) {
@@ -2320,15 +2336,6 @@ ConfigurableMenuApplet.prototype = {
             let menu = this._childMenus[pos];
             menu.setArrowSide(this._arrowSide);
          }
-      }
-   },
-
-   close: function(animate) {
-      if(this._floating) {
-         ConfigurableMenu.prototype.close.call(this, animate);
-      } else {
-         this.isOpen = false;
-         this.actor.hide();
       }
    },
 

@@ -409,7 +409,7 @@ MyApplet.prototype = {
 
    _close_menu: function() {
       if((this.menu)&&(this.menu.isOpen))
-         this.menu.close();
+         this.menu.close(false, true);
    },
 
    _clean_appmenu: function() {
@@ -455,7 +455,7 @@ MyApplet.prototype = {
 
    on_applet_clicked: function(event) {
       if((this.menu) && (event.get_button() == 1)) {
-         this.menu.toggle();
+         this.menu.forcedToggle();
       }
       return false;       
    }

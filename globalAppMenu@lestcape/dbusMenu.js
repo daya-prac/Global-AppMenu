@@ -172,7 +172,7 @@ function DbusMenuItem() {
 DbusMenuItem.prototype = {
     __proto__: ConfigurableMenus.PopupMenuAbstractFactory.prototype,
 
-    // will steal the properties object
+    // Will steal the properties object
     _init: function(id, children_ids, properties, client) {
         ConfigurableMenus.PopupMenuAbstractFactory.prototype._init.call(this, id, children_ids, this._createParameters(properties, client));
     },
@@ -487,13 +487,13 @@ DBusClient.prototype = {
 
     _clientReady: function(result, error) {
         if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
+            global.logWarning("Could not initialize menu proxy: "+error);
+            return;
         }
-
         this._requestLayoutUpdate();
 
-        // listen for updated layouts and properties
+        // Listen for updated layouts and properties
         if(this._proxy_menu) {
             this._proxy_menu.connectSignal("LayoutUpdated", Lang.bind(this, this._onLayoutUpdated));
             this._proxy_menu.connectSignal("ItemsPropertiesUpdated", Lang.bind(this, this._onPropertiesUpdated));
@@ -508,7 +508,7 @@ DBusClient.prototype = {
         return null;
     },
 
-    // we don't need to cache and burst-send that since it will not happen that frequently
+    // We don't need to cache and burst-send that since it will not happen that frequently
     send_about_to_show: function(id) {
         if(this._proxy_menu) {
             this._proxy_menu.AboutToShowRemote(id, Lang.bind(this, function(result, error) {
@@ -603,15 +603,14 @@ DBusClientGtk.prototype = {
     _init: function(busName, busPath, windowPath, appPath) {
         DBusClient.prototype._init.call(this, busName, busPath);
         this.labels_ids = {};
-        this._idActionsUpdate = 0;
         this.gtk_menubar_menus = null;
         this._windowPath = windowPath;
         this._appPath = appPath;
-        this.actions_ids = {};//FIXME add and remove better?
+        this.actions_ids = {};
     },
 
     get_root_id: function() {
-        return "00"; //FIXME will start always on 02?
+        return "00";
     },
 
     _start_main_proxy: function() {
@@ -621,8 +620,6 @@ DBusClientGtk.prototype = {
     },
 
     _requestActionsUpdate: function(proxy, type) {
-        //if (this._idActionsUpdate != 0)
-        //    this._idActionsUpdate = 0;
         if (proxy)
             proxy.DescribeAllRemote(Lang.bind(this, this._endActionsUpdate, type));
     },
@@ -670,18 +667,24 @@ DBusClientGtk.prototype = {
             let action_id = this._items[id].getAction();
             if(action_id) {
                 this.actions_ids[action_id] = id;
-                try {
-                    // FIXME we need to find a better way to get more standar gtk icons
-                    // using the gtk-action-id.
-                    let gtk_icon_name = action_id.toLowerCase();
-                    if(IconTheme.has_icon(gtk_icon_name)) {
-                        let icon = IconTheme.load_icon(gtk_icon_name, 25,
-                                       Gtk.IconLookupFlags.GENERIC_FALLBACK);
-                        this._items[id].setGdkIcon(icon);
-                    }
-                } catch(e) {
-                   global.logWarning("While reading actions ids: " + error);
+                this._createIconForActionId(id, action_id);
+            }
+        }
+    },
+
+    _createIconForActionId: function(id, action_id) {
+        if ((id in this._items)&&(!this._items[id].getGdkIcon())) {
+            let action = action_id.replace("unity.", "").replace("win.", "").replace("app.", "");
+            try {
+                // FIXME we need to find a better way to get more standar gtk icons
+                // using the gtk-action-id.
+                let gtk_icon_name = action.toLowerCase();
+                if(IconTheme.has_icon(gtk_icon_name)) {
+                    let icon = IconTheme.load_icon(gtk_icon_name, 25, Gtk.IconLookupFlags.GENERIC_FALLBACK);
+                    this._items[id].setGdkIcon(icon);
                 }
+            } catch(e) {
+                global.logWarning("While reading icon for actions ids: " + error);
             }
         }
     },
@@ -721,8 +724,7 @@ DBusClientGtk.prototype = {
             global.logWarning("While reading menu layout: " + error);
             return;
         }
-
-        //Now unpack the menu and create a fake root item?
+        //Now unpack the menu and create our items
         if((result) && (result[0])) {
             let init_id = this.get_root_id();
             this.gtk_menubar_menus = {};
@@ -864,25 +866,22 @@ DBusClientGtk.prototype = {
         }
     },
 
-    _onActionsUpdated: function(proxy, type) {
-        //if(this._idActionsUpdate == 0) {
-            //this._idActionsUpdate =
-            GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE,
-                Lang.bind(this, this._requestActionsUpdate, proxy, type));
-        //}
+    _onActionsUpdated: function(proxy, sender, data, type) {
+        this._requestActionsUpdate(proxy, type);
     },
 
     _clientReady: function(result, error) {
         if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
+            global.logWarning("Could not initialize menu proxy: "+error);
+            return;
         }
+
         this._requestLayoutUpdate();
-        // listen for updated layouts and actions
-        this._idLayoutUpdate = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, Lang.bind(this, function() {
-            if(this._proxy_menu)
-                this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
-        }));
+        // Listen for updated layouts and actions
+        if(this._proxy_menu)
+            this._proxy_menu.connectSignal("Changed", Lang.bind(this, this._onLayoutUpdated));
+
         if(this._busPath)
             this._proxy_unity_action = new ActionsGtkClientProxy(Gio.DBus.session, this._busName, this._busPath,
                 Lang.bind(this, this._clientActionReady, "unity"));
@@ -896,8 +895,9 @@ DBusClientGtk.prototype = {
 
     _clientActionReady: function(result, error, type) {
         if (error) {
-            global.logWarning("Could not initialize menu proxy: "+error);
             //FIXME: show message to the user?
+            global.logWarning("Could not initialize menu proxy: "+error);
+            return;
         }
         if(type == "unity") {
             this._requestActionsUpdate(this._proxy_unity_action, type);

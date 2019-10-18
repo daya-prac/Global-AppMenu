@@ -3007,7 +3007,7 @@ MenuFactory.prototype = {
                 PopupMenu using a non instance of the class PopupMenuAbstractFactory");
         }
         // The shell menu
-        let shellItem = this._createShellItem(factoryMenu, launcher, orientation, menuManager);
+        shellItem = this._createShellItem(factoryMenu, launcher, orientation, menuManager);
         this._attachToMenu(shellItem, factoryMenu);
         this._menuManager.push(menuManager);
         return shellItem;
